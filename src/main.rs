@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         Cmd::Report { json, baseline, html } => {
             let rep: Report = serde_json::from_str(&std::fs::read_to_string(json)?)?;
             match html {
-                Some(path) => std::fs::write(path, html::page(&rep, baseline.as_deref()))?,
+                Some(path) => std::fs::write(path, html::page(&rep))?,
                 None => print!("{}", report::markdown(&rep, baseline.as_deref())),
             }
             Ok(())
@@ -208,7 +208,7 @@ async fn main() -> Result<()> {
             let md = report::markdown(&report, baseline.as_deref());
             std::fs::write(out.join(format!("{stamp}.md")), &md)?;
             std::fs::write(out.join("latest.md"), &md)?;
-            let page = html::page(&report, baseline.as_deref());
+            let page = html::page(&report);
             std::fs::write(out.join(format!("{stamp}.html")), &page)?;
             std::fs::write(out.join("latest.html"), &page)?;
             println!("{md}");
