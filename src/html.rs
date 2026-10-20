@@ -197,6 +197,64 @@ fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &V
     o.push_str("</section>");
 }
 
+fn group_mean(s: &ServerRun, workloads: &[&str]) -> Option<f64> {
+    let vals: Vec<f64> = workloads.iter().filter_map(|w| find(s, w)).map(|r| r.ok_per_s).filter(|v| *v > 0.0).collect();
+    if vals.is_empty() {
+        return None;
+    }
+    Some((vals.iter().map(|v| v.ln()).sum::<f64>() / vals.len() as f64).exp())
+}
+
+fn peak_mem(s: &ServerRun) -> f64 {
+    s.results.iter().filter(|r| r.skipped.is_none()).map(|r| r.peak_anon_mb + r.peak_file_mb).fold(0.0, f64::max)
+}
+
+fn summary(o: &mut String, rep: &Report, order: &[usize]) {
+    o.push_str("<h2 class=first>Summary</h2><p class=unit style=\"margin:0 0 10px\">Geometric mean of successful requests per second across each group of workloads. Servers are ranked by the mean over all of them.</p><div class=sum><table><tr><th></th><th>server</th>");
+    for (title, _) in GROUPS {
+        let _ = write!(o, "<th>{title}</th>");
+    }
+    o.push_str("<th>p99 get-1k</th><th>peak memory</th><th>problems</th></tr>");
+    let all: Vec<&str> = GROUPS.iter().flat_map(|(_, w)| w.iter().copied()).collect();
+    let best: Vec<f64> = GROUPS
+        .iter()
+        .map(|(_, w)| rep.servers.iter().filter_map(|s| group_mean(s, w)).fold(0.0, f64::max))
+        .collect();
+    for (rank, &i) in order.iter().enumerate() {
+        let sv = &rep.servers[i];
+        let _ = write!(o, "<tr><td class=rank>{}</td><td class=srv>{}</td>", rank + 1, esc(&sv.name));
+        for (g, (_, w)) in GROUPS.iter().enumerate() {
+            match group_mean(sv, w) {
+                Some(v) => {
+                    let _ = write!(
+                        o,
+                        "<td><span class=cell><i style=\"width:{:.1}%\"></i><b>{}</b></span></td>",
+                        (v / best[g].max(1e-9) * 100.0).clamp(0.0, 100.0),
+                        rate(v)
+                    );
+                }
+                None => o.push_str("<td class=na>n/a</td>"),
+            }
+        }
+        let _ = write!(o, "<td class=num>{}</td>", find(sv, "get-1k").map(|r| lat(r.p99_us)).unwrap_or_else(|| "n/a".into()));
+        let _ = write!(o, "<td class=num>{:.0} MB</td>", peak_mem(sv));
+        let bad: Vec<&str> = all
+            .iter()
+            .filter(|w| find(sv, w).is_some_and(|r| !problems(r).is_empty()))
+            .copied()
+            .collect();
+        if let Some(e) = &sv.error {
+            let _ = write!(o, "<td class=flagtxt>did not run: {}</td>", esc(e.lines().next().unwrap_or("")));
+        } else if bad.is_empty() {
+            o.push_str("<td class=na>none</td>");
+        } else {
+            let _ = write!(o, "<td class=flagtxt>{}</td>", esc(&bad.join(", ")));
+        }
+        o.push_str("</tr>");
+    }
+    o.push_str("</table></div>");
+}
+
 const STYLE: &str = r#"
 :root{--paper:#fbfbfa;--ink:#16212c;--dim:#6a7784;--rule:#e1e5e9;--bar:#7d93aa;--accent:#2f5d8a;--bad:#c23b2e;
 --sans:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
@@ -214,6 +272,7 @@ h1{margin:0;font-size:44px;line-height:1;font-weight:700;letter-spacing:-.035em}
 .setup{margin:28px 0 0;padding:12px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);display:flex;flex-wrap:wrap;gap:6px 36px;color:var(--dim);font-size:13px}
 .setup span b{color:var(--ink);font-weight:600;font-family:var(--mono);font-size:12.5px}
 .unit{margin:14px 0 0;color:var(--dim);font-size:13px}
+h2.first{margin-top:36px}
 h2{margin:44px 0 14px;font-size:22px;letter-spacing:-.02em}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:36px 40px}
 .panel{min-width:0}
@@ -230,6 +289,20 @@ h3{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--ink);font:600
 .axis .track{height:18px}
 .axis em{position:absolute;top:2px;transform:translateX(-50%);font:11px var(--mono);font-style:normal;color:var(--dim);white-space:nowrap}
 .fails{margin:6px 0 0;color:var(--bad);font-size:12px;line-height:1.35}
+.sum table{border-collapse:collapse;width:100%}
+.sum th{font-weight:500;color:var(--dim);text-align:right;padding:6px 14px 6px 0;border-bottom:1px solid var(--ink);font-size:12.5px}
+.sum td{padding:7px 14px 7px 0;border-bottom:1px solid var(--rule);text-align:right;vertical-align:middle}
+.sum th:nth-child(2),.sum td.srv{text-align:left}
+.sum td.rank{width:28px;color:var(--dim);font:12px var(--mono);text-align:left}
+.sum td.srv{font-weight:600}
+.sum td.num{font:12.5px var(--mono)}
+.sum td.na{color:var(--dim)}
+.sum td.flagtxt{color:var(--bad);font-size:12px;text-align:left;max-width:260px;white-space:normal}
+.sum th:last-child{text-align:left}
+.sum td:last-child{text-align:left}
+.cell{position:relative;display:inline-block;min-width:110px;height:22px;text-align:right}
+.cell i{position:absolute;left:0;top:3px;bottom:3px;background:#dbe3eb;border-radius:0 2px 2px 0}
+.cell b{position:relative;font:600 12.5px/22px var(--mono);padding-right:4px}
 .view{display:none}
 body[data-view=rps] .v-rps,body[data-view=cpu] .v-cpu,body[data-view=p99] .v-p99{display:block}
 body[data-view=rps] .grid.v-rps,body[data-view=cpu] .grid.v-cpu,body[data-view=p99] .grid.v-p99{display:grid}
@@ -285,6 +358,7 @@ pub fn page(rep: &Report) -> String {
         rep.connections,
         rep.host_cpus
     );
+    summary(&mut o, rep, &order);
     o.push_str("<div class=legend><span><i></i>result</span><span><i class=h></i>some requests failed, so the rate is not a clean comparison</span></div>");
 
     for view in &VIEWS {

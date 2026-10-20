@@ -16,11 +16,21 @@ pub struct Vars {
 }
 
 impl Vars {
+    fn npub(&self) -> String {
+        let mut key = [0u8; 32];
+        match hex::decode(&self.pubkey) {
+            Ok(bytes) if bytes.len() == 32 => key.copy_from_slice(&bytes),
+            _ => return String::new(),
+        }
+        crate::nostr::npub(&key)
+    }
+
     pub fn expand(&self, text: &str) -> String {
         text.replace("{port}", &self.port.to_string())
             .replace("{data}", &self.data.to_string_lossy())
             .replace("{src}", &self.src.to_string_lossy())
             .replace("{pubkey}", &self.pubkey)
+            .replace("{npub}", &self.npub())
     }
 }
 

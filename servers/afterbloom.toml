@@ -1,0 +1,41 @@
+name = "afterbloom"
+port = 18111
+notes = "damus-io/afterbloom, Rust + axum, no database, blobs are files with a symlink per owner. Built for expiring blobs. Per-IP upload rate limit and byte budget raised out of the way"
+
+[source]
+git = "https://github.com/damus-io/afterbloom.git"
+
+[image]
+dockerfile_inline = """
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/afterbloom /usr/local/bin/afterbloom
+"""
+
+[[files]]
+path = "{data}/config.toml"
+content = """
+listen = "127.0.0.1:{port}"
+storage_dir = "{data}/store"
+public_url = "http://127.0.0.1:{port}"
+ttl_seconds = 86400
+sweep_interval_seconds = 3600
+max_upload_bytes = 2147483648
+max_auth_lifetime_seconds = 3600
+
+[ratelimit]
+uploads_burst = 1000000000
+uploads_refill_per_minute = 1000000000
+bytes_per_hour = 1000000000000000
+"""
+
+[run]
+cmd = ["afterbloom", "--config", "{data}/config.toml"]
+env = { RUST_LOG = "warn" }
+
+[upload]
+auth = "std"
