@@ -193,6 +193,9 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
             notes.push(format!("- `{}`: {}", sv.name, sv.notes));
         }
         for r in &sv.results {
+            if let Some(e) = &r.error_sample {
+                notes.push(format!("- `{}` / {}: first failure was {}", sv.name, r.name, e));
+            }
             if r.skipped.is_none() && r.load_gen_util > 0.85 {
                 notes.push(format!(
                     "- `{}` / {}: load generator was {:.0}% busy, so this number may be the generator's limit",

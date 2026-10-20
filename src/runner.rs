@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use tokio::process::{Child, Command};
 
 use crate::config::{ServerDef, Source};
 use crate::load;
@@ -14,7 +12,7 @@ pub struct Vars {
     pub port: u16,
     pub data: PathBuf,
     pub src: PathBuf,
-    pub bin: PathBuf,
+    pub pubkey: String,
 }
 
 impl Vars {
@@ -22,99 +20,142 @@ impl Vars {
         text.replace("{port}", &self.port.to_string())
             .replace("{data}", &self.data.to_string_lossy())
             .replace("{src}", &self.src.to_string_lossy())
-            .replace("{bin}", &self.bin.to_string_lossy())
+            .replace("{pubkey}", &self.pubkey)
     }
 }
+
+const IGNORE: &str = "target\n.git\nnode_modules\n*.log\n";
 
 pub struct Running {
     pub addr: SocketAddr,
     pub roots: Vec<u32>,
-    child: Option<Child>,
+    server: Option<String>,
     containers: Vec<String>,
     pub log: PathBuf,
 }
 
-async fn sh(cmd: &str, cwd: &Path, env: &HashMap<String, String>, log: &Path) -> Result<()> {
-    let out = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(cwd)
-        .envs(env)
-        .stdout(Stdio::from(out.try_clone()?))
-        .stderr(Stdio::from(out))
-        .status()
-        .await?;
-    if !status.success() {
-        bail!("`{cmd}` failed ({status}); see {}", log.display());
-    }
-    Ok(())
-}
 
-pub async fn prepare_source(def: &ServerDef, cache: &Path, rebuild: bool) -> Result<(PathBuf, PathBuf)> {
-    let Some(src) = &def.source else {
-        return Ok((PathBuf::new(), PathBuf::new()));
-    };
-    let dir = cache.join("src").join(&def.name);
-    std::fs::create_dir_all(cache.join("src"))?;
-    let log = cache.join(format!("{}-build.log", def.name));
-    if let Some(local) = &src.path {
-        let p = PathBuf::from(shellexpand(local));
-        build(src, &p, &p, &log, rebuild, &def.name).await?;
-        return Ok((p.clone(), bin_path(src, &p)));
-    }
-    let git = src.git.as_ref().context("source needs git or path")?;
-    if !dir.join(".git").exists() {
-        sh(&format!("git clone -q {git} {}", dir.display()), cache, &HashMap::new(), &log).await?;
-    }
-    if let Some(rev) = &src.rev {
-        sh(&format!("git fetch -q --tags origin && git checkout -q {rev}"), &dir, &HashMap::new(), &log).await?;
-    }
-    build(src, &dir, &dir, &log, rebuild, &def.name).await?;
-    Ok((dir.clone(), bin_path(src, &dir)))
-}
-
-fn shellexpand(p: &str) -> String {
+fn expand_home(p: &str) -> String {
     match p.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
         None => p.to_string(),
     }
 }
 
-fn bin_path(src: &Source, dir: &Path) -> PathBuf {
-    src.bin.as_ref().map(|b| dir.join(b)).unwrap_or_default()
-}
-
-async fn build(src: &Source, dir: &Path, _src_dir: &Path, log: &Path, rebuild: bool, name: &str) -> Result<()> {
-    let stamp = dir.join(".blossom-bench-built");
-    let rev = {
-        let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output();
-        out.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
-    };
-    let key = format!("{rev}\n{}", src.build.join("\n"));
-    if !rebuild && std::fs::read_to_string(&stamp).ok().as_deref() == Some(&key) {
-        return Ok(());
+fn run_cmd(cmd: &mut StdCommand, log: &Path) -> Result<()> {
+    let out = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
+    let status = cmd.stdout(Stdio::from(out.try_clone()?)).stderr(Stdio::from(out)).status()?;
+    if !status.success() {
+        bail!("{:?} failed ({status}); see {}", cmd.get_program(), log.display());
     }
-    eprintln!("  building {name}");
-    for cmd in &src.build {
-        sh(cmd, dir, &src.env, log).await?;
-    }
-    std::fs::write(&stamp, key)?;
     Ok(())
 }
 
-pub async fn start(def: &ServerDef, work: &Path, vars: &Vars, server_cpus: &[usize], service_cpus: &[usize]) -> Result<Running> {
+pub fn image_tag(def: &ServerDef) -> String {
+    format!("bb-{}:bench", def.name)
+}
+
+pub fn source_dir(def: &ServerDef, work: &Path, log: &Path) -> Result<PathBuf> {
+    let Some(src) = &def.source else {
+        let empty = work.join("empty-context");
+        std::fs::create_dir_all(&empty)?;
+        return Ok(empty);
+    };
+    if let Some(local) = &src.path {
+        return Ok(PathBuf::from(expand_home(local)));
+    }
+    let git = src.git.as_ref().context("source needs git or path")?;
+    let dir = work.join("src").join(&def.name);
+    std::fs::create_dir_all(work.join("src"))?;
+    if !dir.join(".git").exists() {
+        run_cmd(StdCommand::new("git").args(["clone", "-q", git]).arg(&dir), log)?;
+    }
+    checkout(src, &dir, log)?;
+    Ok(dir)
+}
+
+fn checkout(src: &Source, dir: &Path, log: &Path) -> Result<()> {
+    if let Some(rev) = &src.rev {
+        run_cmd(StdCommand::new("git").args(["fetch", "-q", "--tags", "origin"]).current_dir(dir), log)?;
+        run_cmd(StdCommand::new("git").args(["checkout", "-q", rev]).current_dir(dir), log)?;
+    }
+    Ok(())
+}
+
+pub fn build_image(def: &ServerDef, work: &Path, rebuild: bool) -> Result<PathBuf> {
+    let log = work.join(format!("{}-build.log", def.name));
+    let _ = std::fs::remove_file(&log);
+    let image = def.image.clone().unwrap_or_default();
+    if let Some(prebuilt) = &image.prebuilt {
+        run_cmd(StdCommand::new("docker").args(["pull", "-q", prebuilt]), &log)?;
+        run_cmd(StdCommand::new("docker").args(["tag", prebuilt, &image_tag(def)]), &log)?;
+        return Ok(PathBuf::new());
+    }
+    let ctx = source_dir(def, work, &log)?;
+    let dockerfile = match (&image.dockerfile_inline, &image.dockerfile) {
+        (Some(text), _) => {
+            let dir = work.join("dockerfiles");
+            std::fs::create_dir_all(&dir)?;
+            let path = dir.join(format!("{}.Dockerfile", def.name));
+            std::fs::write(&path, text)?;
+            std::fs::write(dir.join(format!("{}.Dockerfile.dockerignore", def.name)), IGNORE)?;
+            path
+        }
+        (None, Some(rel)) => ctx.join(rel),
+        (None, None) => bail!("image needs prebuilt, dockerfile or dockerfile_inline"),
+    };
+    eprintln!("  building image {}", image_tag(def));
+    let mut cmd = StdCommand::new("docker");
+    cmd.env("DOCKER_BUILDKIT", "1").args(["build", "-q", "-t", &image_tag(def), "-f"]).arg(&dockerfile);
+    if rebuild {
+        cmd.arg("--no-cache");
+    }
+    for (k, v) in &image.build_args {
+        cmd.arg("--build-arg").arg(format!("{k}={v}"));
+    }
+    cmd.arg(&ctx);
+    run_cmd(&mut cmd, &log)?;
+    Ok(ctx)
+}
+
+pub struct Limits<'a> {
+    pub server_cpus: &'a [usize],
+    pub service_cpus: &'a [usize],
+    pub memory: &'a str,
+}
+
+fn cpu_list(cpus: &[usize]) -> String {
+    cpus.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
+}
+
+fn container_pid(name: &str) -> Option<u32> {
+    let out = StdCommand::new("docker").args(["inspect", "-f", "{{.State.Pid}}", name]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok().filter(|p| *p != 0)
+}
+
+fn uid_gid() -> String {
+    unsafe { format!("{}:{}", libc::getuid(), libc::getgid()) }
+}
+
+fn base_args(name: &str, cpus: &[usize], memory: &str) -> Vec<String> {
+    let mut a: Vec<String> = ["run", "-d", "--name", name, "--network", "host"].iter().map(|s| s.to_string()).collect();
+    if !cpus.is_empty() {
+        a.push("--cpuset-cpus".into());
+        a.push(cpu_list(cpus));
+    }
+    a.extend(["--memory".into(), memory.into(), "--memory-swap".into(), memory.into()]);
+    a.extend(["--ulimit".into(), "nofile=1048576:1048576".into()]);
+    a
+}
+
+pub async fn start(def: &ServerDef, work: &Path, vars: &Vars, limits: &Limits<'_>) -> Result<Running> {
     let log = work.join(format!("{}.log", def.name));
     let _ = std::fs::remove_file(&log);
     if let Some(url) = &def.url {
         let hostport = url.trim_start_matches("http://").trim_end_matches('/');
-        let addr: SocketAddr = tokio::net::lookup_host(hostport)
-            .await?
-            .next()
-            .context("cannot resolve url")?;
-        return Ok(Running { addr, roots: vec![], child: None, containers: vec![], log });
+        let addr: SocketAddr = tokio::net::lookup_host(hostport).await?.next().context("cannot resolve url")?;
+        return Ok(Running { addr, roots: vec![], server: None, containers: vec![], log });
     }
-    let run = def.run.as_ref().context("server needs a run section or a url")?;
 
     if vars.data.exists() {
         std::fs::remove_dir_all(&vars.data)?;
@@ -128,39 +169,27 @@ pub async fn start(def: &ServerDef, work: &Path, vars: &Vars, server_cpus: &[usi
         std::fs::write(path, vars.expand(&f.content))?;
     }
 
-    for cmd in &def.setup {
-        sh(&vars.expand(cmd), &vars.data, &HashMap::new(), &log).await?;
-    }
-
     let mut containers = Vec::new();
-    let mut service_pids: Vec<String> = Vec::new();
+    let mut roots = Vec::new();
     for svc in &def.services {
         let cname = format!("bb-{}-{}", def.name, svc.name);
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &cname]).output();
-        let mut args: Vec<String> = vec!["run".into(), "-d".into(), "--name".into(), cname.clone()];
-        if !service_cpus.is_empty() {
-            args.push("--cpuset-cpus".into());
-            args.push(cpu_list(service_cpus));
-        }
-        for p in &svc.publish {
-            args.push("-p".into());
-            args.push(format!("127.0.0.1:{p}"));
-        }
+        let _ = StdCommand::new("docker").args(["rm", "-f", &cname]).output();
+        let mut args = base_args(&cname, limits.service_cpus, limits.memory);
         for (k, v) in &svc.env {
             args.push("-e".into());
             args.push(format!("{k}={v}"));
         }
         args.push(svc.image.clone());
-        let out = std::process::Command::new("docker").args(&args).output()?;
+        args.extend(svc.args.iter().map(|a| vars.expand(a)));
+        let out = StdCommand::new("docker").args(&args).output()?;
         if !out.status.success() {
             bail!("docker run {}: {}", svc.name, String::from_utf8_lossy(&out.stderr));
         }
         containers.push(cname.clone());
-        service_pids.push(cname.clone());
         let deadline = std::time::Instant::now() + Duration::from_secs(90);
         loop {
-            let ok = std::process::Command::new("docker")
-                .args(["exec", &cname, "sh", "-c", &svc.ready_cmd])
+            let ok = StdCommand::new("docker")
+                .args(["exec", &cname, "sh", "-c", &vars.expand(&svc.ready_cmd)])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -170,74 +199,83 @@ pub async fn start(def: &ServerDef, work: &Path, vars: &Vars, server_cpus: &[usi
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                for c in &containers {
+                    let _ = StdCommand::new("docker").args(["rm", "-f", c]).output();
+                }
                 bail!("service {} not ready", svc.name);
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-    }
-
-    let cmd: Vec<String> = run.cmd.iter().map(|a| vars.expand(a)).collect();
-    let cwd = run.cwd.as_ref().map(|c| PathBuf::from(vars.expand(c))).unwrap_or_else(|| vars.data.clone());
-    std::fs::create_dir_all(&cwd)?;
-    let out = std::fs::File::create(&log)?;
-    let cpus = server_cpus.to_vec();
-    let mut command = Command::new(&cmd[0]);
-    command
-        .args(&cmd[1..])
-        .current_dir(&cwd)
-        .envs(run.env.iter().map(|(k, v)| (k.clone(), vars.expand(v))))
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(out.try_clone()?))
-        .stderr(Stdio::from(out))
-        .process_group(0);
-    unsafe {
-        command.pre_exec(move || crate::sys::set_affinity(&cpus));
-    }
-    let child = command.spawn().with_context(|| format!("spawning {:?}", cmd))?;
-    let pid = child.id().context("no pid")?;
-    let addr: SocketAddr = ([127, 0, 0, 1], vars.port).into();
-    let mut roots = vec![pid];
-    for cname in &service_pids {
-        let out = std::process::Command::new("docker")
-            .args(["inspect", "-f", "{{.State.Pid}}", cname])
-            .output()?;
-        if let Ok(p) = String::from_utf8_lossy(&out.stdout).trim().parse::<u32>() {
+        if let Some(p) = container_pid(&cname) {
             roots.push(p);
         }
     }
-    let mut running = Running { addr, roots, child: Some(child), containers, log };
-    if let Err(e) = load::wait_ready(addr, &def.ready_path, Duration::from_secs(run.startup_timeout_s)).await {
+
+    let sname = format!("bb-{}", def.name);
+    let _ = StdCommand::new("docker").args(["rm", "-f", &sname]).output();
+    let mut args = base_args(&sname, limits.server_cpus, limits.memory);
+    args.extend(["--user".into(), uid_gid()]);
+    args.extend(["-v".into(), format!("{0}:{0}", vars.data.display()), "-w".into(), vars.data.display().to_string()]);
+    for m in &def.run.mounts {
+        args.push("-v".into());
+        args.push(vars.expand(m));
+    }
+    for (k, v) in &def.run.env {
+        args.push("-e".into());
+        args.push(format!("{k}={}", vars.expand(v)));
+    }
+    if let Some(e) = &def.run.entrypoint {
+        args.extend(["--entrypoint".into(), e.clone()]);
+    }
+    args.push(image_tag(def));
+    args.extend(def.run.cmd.iter().map(|a| vars.expand(a)));
+    let out = StdCommand::new("docker").args(&args).output()?;
+    if !out.status.success() {
+        for c in &containers {
+            let _ = StdCommand::new("docker").args(["rm", "-f", c]).output();
+        }
+        bail!("docker run {}: {}", def.name, String::from_utf8_lossy(&out.stderr));
+    }
+    if let Some(p) = container_pid(&sname) {
+        roots.insert(0, p);
+    }
+    let addr: SocketAddr = ([127, 0, 0, 1], vars.port).into();
+    let mut running = Running { addr, roots, server: Some(sname), containers, log };
+    if let Err(e) = load::wait_ready(addr, &def.ready_path, Duration::from_secs(def.run.startup_timeout_s)).await {
+        running.save_logs();
         let tail = std::fs::read_to_string(&running.log).unwrap_or_default();
         let tail: Vec<&str> = tail.lines().rev().take(15).collect();
         running.stop().await;
         bail!("{e}\n--- log tail ---\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
     }
+    for hook in &def.after_ready {
+        let cname = format!("bb-{}-{}", def.name, hook.service);
+        let out = StdCommand::new("docker").args(["exec", &cname, "sh", "-c", &vars.expand(&hook.cmd)]).output()?;
+        if !out.status.success() {
+            running.stop().await;
+            bail!("after_ready on {} failed: {}", hook.service, String::from_utf8_lossy(&out.stderr));
+        }
+    }
     Ok(running)
 }
 
-fn cpu_list(cpus: &[usize]) -> String {
-    cpus.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
-}
-
 impl Running {
+    fn save_logs(&self) {
+        let Some(name) = &self.server else { return };
+        if let Ok(out) = StdCommand::new("docker").args(["logs", name]).output() {
+            let mut text = out.stdout;
+            text.extend(out.stderr);
+            let _ = std::fs::write(&self.log, text);
+        }
+    }
+
     pub async fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            if let Some(pid) = child.id() {
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGTERM);
-                }
-            }
-            if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
-                if let Some(pid) = child.id() {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGKILL);
-                    }
-                }
-                let _ = child.wait().await;
-            }
+        self.save_logs();
+        if let Some(name) = self.server.take() {
+            let _ = StdCommand::new("docker").args(["rm", "-f", &name]).output();
         }
         for c in self.containers.drain(..) {
-            let _ = std::process::Command::new("docker").args(["rm", "-f", &c]).output();
+            let _ = StdCommand::new("docker").args(["rm", "-f", &c]).output();
         }
     }
 }

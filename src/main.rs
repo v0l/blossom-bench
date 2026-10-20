@@ -72,8 +72,8 @@ async fn main() -> Result<()> {
             for d in config::load_servers(&servers)? {
                 let how = match (&d.url, &d.source) {
                     (Some(u), _) => format!("existing {u}"),
-                    (_, Some(s)) => format!("build {}", s.git.clone().or(s.path.clone()).unwrap_or_default()),
-                    _ => "command only".into(),
+                    (_, Some(s)) => format!("docker build {}", s.git.clone().or(s.path.clone()).unwrap_or_default()),
+                    _ => format!("docker image {}", d.image.as_ref().and_then(|i| i.prebuilt.clone()).unwrap_or_default()),
                 };
                 println!("{:<16} {}", d.name, how);
             }
@@ -138,7 +138,8 @@ async fn main() -> Result<()> {
             for (i, def) in defs.iter().enumerate() {
                 eprintln!("== {}", def.name);
                 let port = if def.port != 0 { def.port } else { 18100 + i as u16 };
-                let (src_dir, bin) = match runner::prepare_source(def, &work, rebuild).await {
+                let built = if def.url.is_some() { Ok(std::path::PathBuf::new()) } else { runner::build_image(def, &work, rebuild) };
+                let src_dir = match built {
                     Ok(v) => v,
                     Err(e) => {
                         eprintln!("  build failed: {e:#}");
@@ -146,8 +147,9 @@ async fn main() -> Result<()> {
                         continue;
                     }
                 };
-                let vars = Vars { port, data: work.join("data").join(&def.name), src: src_dir, bin };
-                let mut running = match runner::start(def, &work, &vars, &server_set, &service_set).await {
+                let signer = nostr::Signer::fixed()?;
+                let vars = Vars { port, data: work.join("data").join(&def.name), src: src_dir, pubkey: signer.pubkey_hex.clone() };
+                let mut running = match runner::start(def, &work, &vars, &runner::Limits { server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory }).await {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("  start failed: {e:#}");
@@ -164,7 +166,7 @@ async fn main() -> Result<()> {
                     run: &run,
                     addr: running.addr,
                     roots: running.roots.clone(),
-                    signer: nostr::Signer::new()?,
+                    signer,
                     load_cpus: load_set.len(),
                     blobs: HashMap::new(),
                 };

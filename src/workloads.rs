@@ -46,6 +46,8 @@ pub struct WorkloadResult {
     pub verified: usize,
     pub verify_bad: usize,
     pub skipped: Option<String>,
+    #[serde(default)]
+    pub error_sample: Option<String>,
 }
 
 pub struct Ctx<'a> {
@@ -90,6 +92,11 @@ fn make_content(rng: &mut Rng, size: usize, kind: &str, index: usize) -> Vec<u8>
     for chunk in data.chunks_mut(8) {
         let v = rng.next().to_le_bytes();
         chunk.copy_from_slice(&v[..chunk.len()]);
+    }
+    if kind == "png" {
+        const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let n = PNG_MAGIC.len().min(data.len());
+        data[..n].copy_from_slice(&PNG_MAGIC[..n]);
     }
     data
 }
@@ -149,6 +156,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
     let mut rng = Rng(seed ^ 0x9E3779B97F4A7C15 | 1);
     let conns = w.connections.unwrap_or(ctx.run.connections);
     let host = ctx.addr.ip().to_string();
+    let bound = ctx.def.upload.bound_auth.then(|| format!("http://{}", ctx.addr));
 
     let (mut plan_blobs, mut upload_all): (Vec<Blob>, Vec<Blob>) = (Vec::new(), Vec::new());
     let plan = |mode: Mode, reqs: Vec<ReqSpec>, order: Option<Vec<u32>>| Plan {
@@ -167,15 +175,21 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
             if (size as u64).saturating_mul(count as u64) > (6u64 << 30) {
                 return Ok(skipped(w, "workload would hold more than 6 GiB in memory"));
             }
+            let content_kind = ctx.def.upload.content.as_deref().unwrap_or(&w.content);
             let mut reqs = Vec::with_capacity(count);
             for i in 0..count {
-                let data = make_content(&mut rng, size, &w.content, i);
+                let data = make_content(&mut rng, size, content_kind, i);
                 let hash = hex::encode(Sha256::digest(&data));
-                let token = ctx.signer.upload_token(&hash, &host, &ctx.def.upload.auth)?;
+                let token = ctx.signer.upload_token(&hash, &host, &ctx.def.upload.auth, bound.as_deref())?;
                 let mut h = headers(ctx.addr);
                 h.insert(AUTHORIZATION, HeaderValue::from_str(&token)?);
-                let ct = if w.content == "text" { "text/plain" } else { "application/octet-stream" };
-                h.insert(CONTENT_TYPE, HeaderValue::from_static(ct));
+                let ct = match &ctx.def.upload.content_type {
+                    Some(c) => c.as_str(),
+                    None if content_kind == "png" => "image/png",
+                    None if content_kind == "text" => "text/plain",
+                    None => "application/octet-stream",
+                };
+                h.insert(CONTENT_TYPE, HeaderValue::from_str(ct)?);
                 if ctx.def.upload.sha_header {
                     h.insert("x-sha-256", HeaderValue::from_str(&hash)?);
                 }
@@ -272,6 +286,9 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
     let cpu_s = (cpu1 - cpu0).max(0.0);
 
     if w.kind == Kind::Upload {
+        if ctx.def.upload.settle_s > 0 {
+            tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+        }
         let kept: Vec<Blob> = out.ok_idx.iter().map(|&i| upload_all[i as usize].clone()).collect();
         verified = verify(ctx, &kept, &mut rng).await;
         ctx.blobs.insert(w.name.clone(), kept);
@@ -303,6 +320,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         verified: verified.0,
         verify_bad: verified.1,
         skipped: None,
+        error_sample: out.error_sample,
     })
 }
 

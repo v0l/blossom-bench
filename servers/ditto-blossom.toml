@@ -4,8 +4,17 @@ notes = "LMDB metadata, sendfile for large blobs, fsync before every upload ack"
 
 [source]
 git = "https://github.com/soapbox-pub/ditto-blossom.git"
-build = ["cargo build --release"]
-bin = "target/release/ditto-blossom"
+
+[image]
+dockerfile_inline = """
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release 
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/ditto-blossom /usr/local/bin/ditto-blossom
+"""
 
 [[files]]
 path = "{data}/config.toml"
@@ -20,5 +29,4 @@ per_minute = 100000000
 """
 
 [run]
-cmd = ["{bin}", "-c", "{data}/config.toml"]
-cwd = "{data}"
+cmd = ["ditto-blossom", "-c", "{data}/config.toml"]

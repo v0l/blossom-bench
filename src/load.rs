@@ -58,6 +58,7 @@ pub struct Outcome {
     pub status: BTreeMap<u16, u64>,
     pub hist: Histogram<u64>,
     pub ok_idx: Vec<u32>,
+    pub error_sample: Option<String>,
 }
 
 struct Tally {
@@ -70,6 +71,7 @@ struct Tally {
     status: BTreeMap<u16, u64>,
     hist: Histogram<u64>,
     ok_idx: Vec<u32>,
+    error_sample: Option<String>,
 }
 
 impl Tally {
@@ -84,6 +86,7 @@ impl Tally {
             status: BTreeMap::new(),
             hist: Histogram::new_with_bounds(1, 120_000_000, 3).expect("histogram bounds"),
             ok_idx: Vec::new(),
+            error_sample: None,
         }
     }
 }
@@ -164,11 +167,16 @@ async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, de
             let mut body = resp.into_body();
             let mut got = 0u64;
             let mut failed = false;
+            let mut head: Vec<u8> = Vec::new();
             while let Some(frame) = body.frame().await {
                 match frame {
                     Ok(f) => {
                         if let Some(d) = f.data_ref() {
                             got += d.len() as u64;
+                            if head.len() < 200 {
+                                let room = 200 - head.len();
+                                head.extend_from_slice(&d[..d.len().min(room)]);
+                            }
                         }
                     }
                     Err(_) => {
@@ -190,6 +198,10 @@ async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, de
             *tally.status.entry(status).or_insert(0) += 1;
             let status_ok = status >= spec.ok_lo && status <= spec.ok_hi;
             let len_ok = spec.expect_len.is_none_or(|l| l == got);
+            if !status_ok && tally.error_sample.is_none() {
+                let text = String::from_utf8_lossy(&head).replace(['\n', '\r'], " ");
+                tally.error_sample = Some(format!("{status}: {}", text.trim()));
+            }
             if status_ok && !len_ok {
                 tally.bad_len += 1;
             }
@@ -230,6 +242,7 @@ pub async fn run(addr: SocketAddr, plan: Plan) -> Outcome {
         status: BTreeMap::new(),
         hist: Histogram::new_with_bounds(1, 120_000_000, 3).expect("histogram bounds"),
         ok_idx: Vec::new(),
+        error_sample: None,
     };
     for h in handles {
         let t = h.await.expect("worker task");
@@ -244,6 +257,9 @@ pub async fn run(addr: SocketAddr, plan: Plan) -> Outcome {
         }
         out.hist.add(&t.hist).expect("merge histograms");
         out.ok_idx.extend(t.ok_idx);
+        if out.error_sample.is_none() {
+            out.error_sample = t.error_sample;
+        }
     }
     out.wall = started.elapsed();
     out.ok_idx.sort_unstable();

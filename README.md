@@ -26,7 +26,7 @@ A request only counts as ok when the status is right and, for GETs, the body is 
 full expected length. After each upload workload a sample of blobs is fetched and
 re-hashed, and wrong readbacks are reported next to the throughput.
 
-Servers are started from an empty data directory for each run. CPU sets are checked so
+Servers are started from an empty data directory for each run, and a failing response body is quoted in the report. CPU sets are checked so
 server and load generator never share a core. If the load generator is more than 85%
 busy on its cores, the report says the number may be its limit.
 
@@ -37,25 +37,41 @@ its own signed BUD-11 token. `get`, `head` and `miss` workloads read from the bl
 upload workloads named in `blobs`. `zipf` skews reads toward a hot set. `content = "text"`
 makes compressible bodies.
 
+## How servers are run
+
+Every server and every database runs in a Docker container, started the same way:
+host networking, `--cpuset-cpus` for its CPU list, the same memory cap and file
+limit, and the caller's uid. Images are built from the project's own source with a
+Dockerfile written in the server definition (or the project's own Dockerfile), or
+pulled when the project publishes one. Databases and caches get their own cores
+(`service_cpus`) and count towards the server's CPU and memory.
+
 ## Adding a server
 
 Drop a file in `servers/`. Fields:
 
 - `name`, `port`, `ready_path`, `notes`
-- `[source]`: `git` or `path`, optional `rev`, `build` commands, `bin`
-- `[[services]]`: containers to start first (`image`, `publish`, `env`, `ready_cmd`)
-- `setup`: shell commands run in the data dir after it is emptied
-- `[[files]]`: config files written before start
-- `[run]`: `cmd`, `cwd`, `env`, `startup_timeout_s`
-- `[upload]`: `path`, `auth = "std" | "url"` base64 alphabet, `sha_header`
-- `url = "http://host:port"` instead of `[run]` benchmarks a server that is already running
+- `[source]`: `git` (with optional `rev`) or `path`; it becomes the docker build context
+- `[image]`: `dockerfile_inline`, `dockerfile` (relative to the source) or `prebuilt`
+- `[[services]]`: containers started first (`image`, `args`, `env`, `ready_cmd`)
+- `[[files]]`: config files written into the data dir before start
+- `[[after_ready]]`: `service` + `cmd` run with `docker exec` once the server answers, for seeding
+- `[run]`: `cmd`, `entrypoint`, `env`, `mounts`, `startup_timeout_s`
+- `[upload]`: `path`, `auth = "std" | "url"` base64 alphabet, `bound_auth` (sign `server`, `u` and
+  `method` tags), `sha_header`, `content_type`, `content` (`random`, `text`, `png`), `settle_s`
+- `url = "http://host:port"` instead of a source benchmarks a server that is already running
 
-`{port}`, `{data}`, `{src}` and `{bin}` are expanded in commands, env and files.
+`{port}`, `{data}`, `{src}` and `{pubkey}` are expanded in args, env, files and hooks. `{pubkey}` is the
+fixed benchmark key that signs every upload, so a server can allow-list or register it.
 
 ## Included servers
 
-route96, ditto-blossom, hzrd149/blossom-server (Deno, pinned to 6.3.1) and
-sebdeveloper6952/blossom-server (Go). Building them needs cargo, go, npm and docker.
+route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
+MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server and
+servus-social/servus. Not included: khatru, which is a relay library with no storage backend of
+its own, and satellite-cdn, which needs Cloudflare R2.
+
+Needs docker. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
 ## Caveats
 

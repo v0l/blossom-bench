@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 pub struct Signer {
     keypair: Keypair,
-    pubkey_hex: String,
+    pub pubkey_hex: String,
 }
 
 pub fn random_bytes<const N: usize>() -> Result<[u8; N]> {
@@ -18,8 +18,16 @@ pub fn random_bytes<const N: usize>() -> Result<[u8; N]> {
 }
 
 impl Signer {
+    pub fn fixed() -> Result<Self> {
+        Self::from_bytes(Sha256::digest(b"blossom-bench signing key").into())
+    }
+
     pub fn new() -> Result<Self> {
-        let sk = SecretKey::from_secret_bytes(random_bytes::<32>()?)?;
+        Self::from_bytes(random_bytes::<32>()?)
+    }
+
+    fn from_bytes(bytes: [u8; 32]) -> Result<Self> {
+        let sk = SecretKey::from_secret_bytes(bytes)?;
         let keypair = Keypair::from_secret_key(&sk);
         let (xonly, _) = keypair.x_only_public_key();
         Ok(Self {
@@ -28,16 +36,27 @@ impl Signer {
         })
     }
 
-    pub fn upload_token(&self, sha256_hex: &str, server_host: &str, encoding: &str) -> Result<String> {
+    pub fn upload_token(&self, sha256_hex: &str, server_host: &str, encoding: &str, bound: Option<&str>) -> Result<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        let tags = serde_json::json!([
-            ["t", "upload"],
-            ["x", sha256_hex],
-            ["expiration", (now + 3600).to_string()],
-            ["server", server_host],
-        ]);
+            .as_secs()
+            + if bound.is_some() { 25 } else { 0 };
+        let tags = match bound {
+            Some(base) => serde_json::json!([
+                ["t", "upload"],
+                ["x", sha256_hex],
+                ["expiration", (now + 100).to_string()],
+                ["server", base],
+                ["u", format!("{base}/upload")],
+                ["method", "PUT"],
+            ]),
+            None => serde_json::json!([
+                ["t", "upload"],
+                ["x", sha256_hex],
+                ["expiration", (now + 3600).to_string()],
+                ["server", server_host],
+            ]),
+        };
         let preimage = serde_json::json!([0, self.pubkey_hex, now, 24242, tags, "Upload"]);
         let id: [u8; 32] = Sha256::digest(serde_json::to_vec(&preimage)?).into();
         let sig = schnorr::sign_no_aux_rand(&id, &self.keypair);

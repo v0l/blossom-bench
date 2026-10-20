@@ -2,12 +2,20 @@ name = "blossom-go"
 port = 18104
 notes = "sebdeveloper6952/blossom-server, Go + gin + SQLite with blobs stored in the database; upload cap raised to 2 GB"
 
-setup = ["mkdir -p {data}/db && ln -sfn {src}/db/migrations {data}/db/migrations"]
-
 [source]
 git = "https://github.com/sebdeveloper6952/blossom-server.git"
-build = ["go build -o blossom-go ./cmd/api"]
-bin = "blossom-go"
+
+[image]
+dockerfile_inline = """
+FROM golang:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=1 go build -o /out/blossom-go ./cmd/api
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/blossom-go /usr/local/bin/blossom-go
+COPY --from=build /src/db/migrations /migrations
+"""
 
 [[files]]
 path = "{data}/config.yml"
@@ -30,5 +38,5 @@ allowed_mime_types:
 """
 
 [run]
-cmd = ["{bin}"]
-cwd = "{data}"
+entrypoint = "sh"
+cmd = ["-c", "mkdir -p {data}/db && ln -sfn /migrations {data}/db/migrations && exec blossom-go"]

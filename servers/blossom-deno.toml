@@ -5,8 +5,9 @@ notes = "hzrd149/blossom-server 6.3.1 on Deno; answers 503 when its upload queue
 [source]
 git = "https://github.com/hzrd149/blossom-server.git"
 rev = "v6.3.1"
-build = ["npm install --no-save --prefix /tmp/blossom-bench/deno-rt deno"]
-env = {}
+
+[image]
+dockerfile = "Dockerfile"
 
 [[files]]
 path = "{data}/config.yml"
@@ -37,6 +38,7 @@ media:
 """
 
 [run]
-cmd = ["/tmp/blossom-bench/deno-rt/node_modules/.bin/deno", "run", "-P", "--config", "{src}/deno.json", "{src}/main.ts"]
-cwd = "{data}"
-startup_timeout_s = 120
+entrypoint = "deno"
+cmd = ["run", "-P", "--config", "/app/deno.json", "/app/main.ts"]
+env = { HOME = "{data}" }
+startup_timeout_s = 180

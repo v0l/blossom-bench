@@ -4,14 +4,22 @@ notes = "built with --features blossom; MariaDB on its own cores"
 
 [source]
 path = "~/git/route96"
-build = ["cargo build --release --no-default-features --features blossom --bin route96"]
-bin = "target/release/route96"
-env = { CARGO_TARGET_DIR = "/tmp/blossom-bench/target-route96" }
+
+[image]
+dockerfile_inline = """
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --no-default-features --features blossom --bin route96
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/route96 /usr/local/bin/route96
+"""
 
 [[services]]
 name = "mariadb"
 image = "mariadb:latest"
-publish = ["33781:3306"]
+args = ["--port=33781", "--bind-address=127.0.0.1"]
 env = { MARIADB_ROOT_PASSWORD = "root", MARIADB_DATABASE = "route96" }
 ready_cmd = "mariadb -uroot -proot -e 'select 1'"
 
@@ -26,6 +34,5 @@ public_url: "http://127.0.0.1:{port}"
 """
 
 [run]
-cmd = ["/tmp/blossom-bench/target-route96/release/route96", "--config", "{data}/config.yaml"]
-cwd = "{data}"
+cmd = ["route96", "--config", "{data}/config.yaml"]
 env = { RUST_LOG = "warn" }

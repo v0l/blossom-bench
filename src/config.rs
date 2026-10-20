@@ -15,13 +15,15 @@ pub struct ServerDef {
     #[serde(default)]
     pub notes: String,
     pub source: Option<Source>,
+    pub image: Option<Image>,
     #[serde(default)]
     pub services: Vec<Service>,
     #[serde(default)]
     pub files: Vec<FileSpec>,
     #[serde(default)]
-    pub setup: Vec<String>,
-    pub run: Option<RunSpec>,
+    pub after_ready: Vec<Hook>,
+    #[serde(default)]
+    pub run: RunSpec,
     #[serde(default)]
     pub upload: UploadSpec,
 }
@@ -31,11 +33,15 @@ pub struct Source {
     pub git: Option<String>,
     pub path: Option<String>,
     pub rev: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Image {
+    pub prebuilt: Option<String>,
+    pub dockerfile: Option<String>,
+    pub dockerfile_inline: Option<String>,
     #[serde(default)]
-    pub build: Vec<String>,
-    pub bin: Option<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
+    pub build_args: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -43,10 +49,16 @@ pub struct Service {
     pub name: String,
     pub image: String,
     #[serde(default)]
-    pub publish: Vec<String>,
+    pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
     pub ready_cmd: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Hook {
+    pub service: String,
+    pub cmd: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -57,12 +69,21 @@ pub struct FileSpec {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct RunSpec {
+    pub entrypoint: Option<String>,
+    #[serde(default)]
     pub cmd: Vec<String>,
-    pub cwd: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub mounts: Vec<String>,
     #[serde(default = "default_startup")]
     pub startup_timeout_s: u64,
+}
+
+impl Default for RunSpec {
+    fn default() -> Self {
+        Self { entrypoint: None, cmd: vec![], env: HashMap::new(), mounts: vec![], startup_timeout_s: default_startup() }
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -73,6 +94,12 @@ pub struct UploadSpec {
     pub auth: String,
     #[serde(default)]
     pub sha_header: bool,
+    #[serde(default)]
+    pub bound_auth: bool,
+    pub content_type: Option<String>,
+    pub content: Option<String>,
+    #[serde(default)]
+    pub settle_s: u64,
 }
 
 impl Default for UploadSpec {
@@ -81,6 +108,10 @@ impl Default for UploadSpec {
             path: upload_path(),
             auth: std_auth(),
             sha_header: false,
+            bound_auth: false,
+            content_type: None,
+            content: None,
+            settle_s: 0,
         }
     }
 }
@@ -110,6 +141,8 @@ pub struct SuiteRun {
     pub server_cpus: String,
     pub load_cpus: String,
     pub service_cpus: Option<String>,
+    #[serde(default = "default_memory")]
+    pub server_memory: String,
     #[serde(default = "default_connections")]
     pub connections: usize,
     #[serde(default = "default_duration")]
@@ -122,6 +155,9 @@ pub struct SuiteRun {
     pub seed: u64,
 }
 
+fn default_memory() -> String {
+    "8g".into()
+}
 fn default_connections() -> usize {
     64
 }
