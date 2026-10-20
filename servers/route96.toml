@@ -1,0 +1,31 @@
+name = "route96"
+port = 18101
+notes = "built with --features blossom; MariaDB on its own cores"
+
+[source]
+path = "~/git/route96"
+build = ["cargo build --release --no-default-features --features blossom --bin route96"]
+bin = "target/release/route96"
+env = { CARGO_TARGET_DIR = "/tmp/blossom-bench/target-route96" }
+
+[[services]]
+name = "mariadb"
+image = "mariadb:latest"
+publish = ["33781:3306"]
+env = { MARIADB_ROOT_PASSWORD = "root", MARIADB_DATABASE = "route96" }
+ready_cmd = "mariadb -uroot -proot -e 'select 1'"
+
+[[files]]
+path = "{data}/config.yaml"
+content = """
+listen: "127.0.0.1:{port}"
+database: "mysql://root:root@127.0.0.1:33781/route96"
+storage_dir: "{data}/files"
+max_upload_bytes: 4000000000
+public_url: "http://127.0.0.1:{port}"
+"""
+
+[run]
+cmd = ["/tmp/blossom-bench/target-route96/release/route96", "--config", "{data}/config.yaml"]
+cwd = "{data}"
+env = { RUST_LOG = "warn" }

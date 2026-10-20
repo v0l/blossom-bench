@@ -1,0 +1,57 @@
+[run]
+server_cpus = "0-3"
+load_cpus = "16-31"
+service_cpus = "8-11"
+connections = 64
+duration_s = 10
+warmup_s = 2
+verify = 32
+
+[[workload]]
+name = "put-1k"
+kind = "upload"
+size = 1024
+count = 3000
+
+[[workload]]
+name = "put-64k"
+kind = "upload"
+size = 65536
+count = 600
+
+[[workload]]
+name = "put-1m"
+kind = "upload"
+size = 1048576
+count = 300
+
+[[workload]]
+name = "get-1k"
+kind = "get"
+blobs = ["put-1k"]
+
+[[workload]]
+name = "get-64k"
+kind = "get"
+blobs = ["put-64k"]
+
+[[workload]]
+name = "get-1m"
+kind = "get"
+blobs = ["put-1m"]
+
+[[workload]]
+name = "head-1k"
+kind = "head"
+blobs = ["put-1k"]
+
+[[workload]]
+name = "miss"
+kind = "miss"
+blobs = ["put-1k"]
+
+[[workload]]
+name = "get-hot-1k"
+kind = "get"
+blobs = ["put-1k"]
+zipf = 1.1

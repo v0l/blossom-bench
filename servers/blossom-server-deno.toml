@@ -1,0 +1,42 @@
+name = "blossom-deno"
+port = 18103
+notes = "hzrd149/blossom-server 6.3.1 on Deno; answers 503 when its upload queue is full"
+
+[source]
+git = "https://github.com/hzrd149/blossom-server.git"
+rev = "v6.3.1"
+build = ["npm install --no-save --prefix /tmp/blossom-bench/deno-rt deno"]
+env = {}
+
+[[files]]
+path = "{data}/config.yml"
+content = """
+port: {port}
+host: 127.0.0.1
+publicUrl: http://127.0.0.1:{port}
+database:
+  path: {data}/sqlite.db
+storage:
+  backend: local
+  local:
+    dir: {data}/blobs
+  removeWhenNoOwners: false
+  rules:
+    - type: "*"
+      expiration: 100 years
+upload:
+  enabled: true
+  requireAuth: true
+  maxSize: 2147483648
+list:
+  enabled: false
+mirror:
+  enabled: false
+media:
+  enabled: false
+"""
+
+[run]
+cmd = ["/tmp/blossom-bench/deno-rt/node_modules/.bin/deno", "run", "-P", "--config", "{src}/deno.json", "{src}/main.ts"]
+cwd = "{data}"
+startup_timeout_s = 120

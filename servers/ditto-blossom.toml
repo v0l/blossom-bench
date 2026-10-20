@@ -1,0 +1,24 @@
+name = "ditto-blossom"
+port = 18102
+notes = "LMDB metadata, sendfile for large blobs, fsync before every upload ack"
+
+[source]
+git = "https://github.com/soapbox-pub/ditto-blossom.git"
+build = ["cargo build --release"]
+bin = "target/release/ditto-blossom"
+
+[[files]]
+path = "{data}/config.toml"
+content = """
+listen = "127.0.0.1:{port}"
+data = "{data}/store"
+public_url = "http://127.0.0.1:{port}"
+[upload]
+require_auth = true
+max_size = 2147483648
+per_minute = 100000000
+"""
+
+[run]
+cmd = ["{bin}", "-c", "{data}/config.toml"]
+cwd = "{data}"
