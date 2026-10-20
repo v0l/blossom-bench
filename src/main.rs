@@ -1,4 +1,5 @@
 mod config;
+mod html;
 mod load;
 mod nostr;
 mod report;
@@ -53,6 +54,8 @@ enum Cmd {
         json: PathBuf,
         #[arg(long)]
         baseline: Option<String>,
+        #[arg(long)]
+        html: Option<PathBuf>,
     },
     List {
         #[arg(long, default_value = "servers")]
@@ -79,9 +82,12 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Report { json, baseline } => {
+        Cmd::Report { json, baseline, html } => {
             let rep: Report = serde_json::from_str(&std::fs::read_to_string(json)?)?;
-            print!("{}", report::markdown(&rep, baseline.as_deref()));
+            match html {
+                Some(path) => std::fs::write(path, html::page(&rep, baseline.as_deref()))?,
+                None => print!("{}", report::markdown(&rep, baseline.as_deref())),
+            }
             Ok(())
         }
         Cmd::Run { suite, servers, only, out, work, baseline, rebuild, server_cpus, load_cpus, duration, connections } => {
@@ -202,6 +208,9 @@ async fn main() -> Result<()> {
             let md = report::markdown(&report, baseline.as_deref());
             std::fs::write(out.join(format!("{stamp}.md")), &md)?;
             std::fs::write(out.join("latest.md"), &md)?;
+            let page = html::page(&report, baseline.as_deref());
+            std::fs::write(out.join(format!("{stamp}.html")), &page)?;
+            std::fs::write(out.join("latest.html"), &page)?;
             println!("{md}");
             eprintln!("wrote {}", json_path.display());
             Ok(())

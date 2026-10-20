@@ -14,7 +14,10 @@ cargo build --release
 ./target/release/blossom-bench report results/<stamp>.json --baseline route96
 ```
 
-Output goes to `results/<stamp>.{json,md}` and `results/latest.md`.
+Output goes to `results/<stamp>.{json,md,html}` and `results/latest.{md,html}`. The HTML page is
+self-contained (no network, no build step): a ratio heat map, per-workload throughput and
+efficiency bars with tabs, latency and memory tables, and the notes. Re-render one from saved
+results with `blossom-bench report results/<stamp>.json --baseline route96 --html out.html`.
 
 ## What it measures
 
