@@ -17,8 +17,8 @@ pub struct ServerDef {
     pub startup_timeout_s: u64,
     #[serde(default)]
     pub data_dirs: Vec<String>,
-    #[serde(default = "ok_status")]
-    pub get_status: u16,
+    #[serde(default)]
+    pub follow_redirects: bool,
     #[serde(default)]
     pub after_ready: Vec<Hook>,
     #[serde(default)]
@@ -63,9 +63,6 @@ impl Default for UploadSpec {
     }
 }
 
-fn ok_status() -> u16 {
-    200
-}
 fn root_path() -> String {
     "/".into()
 }

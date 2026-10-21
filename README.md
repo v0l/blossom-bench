@@ -59,8 +59,7 @@ Make `servers/<name>/` with:
   (`build.context`) with either its own Dockerfile or `dockerfile_inline`, or use a
   published `image`.
 - `server.toml`: `name`, `port`, `ready_path`, `notes`, `startup_timeout_s`, `data_dirs`
-  (created empty under the data dir), `get_status` (set to 302 for a server whose GET
-  redirects), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
+  (created empty under the data dir), `get_status` , `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
   server answers, for seeding) and `[upload]`: `path`, `auth = "std" | "url"` base64
   alphabet, `bound_auth` (sign `server`, `u` and `method` tags), `sha_header`,
   `content_type`, `content` (`random`, `text`, `png`), `settle_s`.
@@ -84,9 +83,10 @@ only the PHP backend behind a Cloudflare Worker proxy (it answers uploads over H
 requests from that Worker and has no public blob GET of its own).
 
 PrimalHQ/primal-blossom-server answers GET with a 302 to a separate media server, which the
-compose project runs as nginx, so its get rows measure the redirect lookup and not the bytes.
-Readback checks follow the redirect and hash the real file. Its schema file lacks four tables that
-its queries use, which `files/schema.sql` adds.
+compose project runs as nginx. A redirect is not a served blob, so `follow_redirects = true` makes the
+load generator follow it, and a GET only counts as ok when the final response has the right bytes.
+The latency includes both requests, and nginx's CPU counts towards the server's. Its schema file
+lacks four tables that its queries use, which `files/schema.sql` adds.
 
 Needs docker with the compose plugin. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
