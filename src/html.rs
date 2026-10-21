@@ -75,6 +75,14 @@ fn find<'a>(s: &'a ServerRun, name: &str) -> Option<&'a WorkloadResult> {
     s.results.iter().find(|r| r.name == name).filter(|r| r.skipped.is_none())
 }
 
+fn disqualified<'a>(s: &'a ServerRun, name: &str) -> Option<&'a WorkloadResult> {
+    s.results.iter().find(|r| r.name == name).filter(|r| r.disqualified)
+}
+
+fn has_dq(s: &ServerRun) -> bool {
+    s.results.iter().any(|r| r.disqualified)
+}
+
 fn problems(r: &WorkloadResult) -> Vec<String> {
     let mut p = Vec::new();
     let f = fail_rate(r);
@@ -141,7 +149,11 @@ fn geomean_order(rep: &Report) -> Vec<usize> {
         if logs.is_empty() { f64::MIN } else { logs.iter().sum::<f64>() / logs.len() as f64 }
     };
     let mut idx: Vec<usize> = (0..rep.servers.len()).collect();
-    idx.sort_by(|a, b| score(*b).partial_cmp(&score(*a)).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|a, b| {
+        has_dq(&rep.servers[*a])
+            .cmp(&has_dq(&rep.servers[*b]))
+            .then(score(*b).partial_cmp(&score(*a)).unwrap_or(std::cmp::Ordering::Equal))
+    });
     idx
 }
 
@@ -163,12 +175,22 @@ fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &V
 
     let _ = write!(o, "<section class=panel><h3>{}</h3>", esc(workload));
     let mut failures: Vec<String> = Vec::new();
+    let mut offloads: Vec<String> = Vec::new();
     for (i, r) in &rows {
         let name = esc(&rep.servers[*i].name);
         let Some(r) = r else {
-            let _ = write!(o, "<div class=row><span class=name>{name}</span><span class=track></span><span class=val>n/a</span></div>");
+            if let Some(d) = disqualified(&rep.servers[*i], workload) {
+                let reason = d.skipped.clone().unwrap_or_default();
+                let _ = write!(o, "<div class=row><span class=name>{name}</span><span class=track></span><span class=val><b class=flag title=\"{}\">DQ</b></span></div>", esc(&reason));
+                failures.push(format!("{}: disqualified, {}", rep.servers[*i].name, reason));
+            } else {
+                let _ = write!(o, "<div class=row><span class=name>{name}</span><span class=track></span><span class=val>n/a</span></div>");
+            }
             continue;
         };
+        if let Some(why) = &r.offloaded {
+            offloads.push(format!("{}: offloaded, {}", rep.servers[*i].name, why));
+        }
         let v = (view.value)(r);
         let probs = problems(r);
         if !probs.is_empty() {
@@ -194,6 +216,9 @@ fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &V
     if !failures.is_empty() {
         let _ = write!(o, "<p class=fails>{}</p>", esc(&failures.join(". ")));
     }
+    if !offloads.is_empty() {
+        let _ = write!(o, "<p class=offl>{}</p>", esc(&offloads.join(". ")));
+    }
     o.push_str("</section>");
 }
 
@@ -210,7 +235,7 @@ fn peak_mem(s: &ServerRun) -> f64 {
 }
 
 fn summary(o: &mut String, rep: &Report, order: &[usize]) {
-    o.push_str("<h2 class=first>Summary</h2><p class=unit style=\"margin:0 0 10px\">Geometric mean of successful requests per second across each group of workloads. Servers are ranked by the mean over all of them.</p><div class=sum><table><tr><th></th><th>server</th>");
+    o.push_str("<h2 class=first>Summary</h2><p class=unit style=\"margin:0 0 10px\">Geometric mean of successful requests per second across each group of workloads. Servers are ranked by the mean over all of them. A server with a disqualified handler (DQ) is listed after the others.</p><div class=sum><table><tr><th></th><th>server</th>");
     for (title, _) in GROUPS {
         let _ = write!(o, "<th>{title}</th>");
     }
@@ -233,11 +258,18 @@ fn summary(o: &mut String, rep: &Report, order: &[usize]) {
                         rate(v)
                     );
                 }
+                None if w.iter().all(|n| disqualified(sv, n).is_some()) => o.push_str("<td class=flagtxt><b>DQ</b></td>"),
                 None => o.push_str("<td class=na>n/a</td>"),
             }
         }
         let _ = write!(o, "<td class=num>{}</td>", find(sv, "get-1k").map(|r| lat(r.p99_us)).unwrap_or_else(|| "n/a".into()));
         let _ = write!(o, "<td class=num>{:.0} MB</td>", peak_mem(sv));
+        let dq: Vec<&str> = all.iter().filter(|w| disqualified(sv, w).is_some()).copied().collect();
+        let off: Vec<&str> = all
+            .iter()
+            .filter(|w| sv.results.iter().any(|r| r.name == **w && r.offloaded.is_some() && !r.disqualified))
+            .copied()
+            .collect();
         let bad: Vec<&str> = all
             .iter()
             .filter(|w| find(sv, w).is_some_and(|r| !problems(r).is_empty()))
@@ -245,10 +277,20 @@ fn summary(o: &mut String, rep: &Report, order: &[usize]) {
             .collect();
         if let Some(e) = &sv.error {
             let _ = write!(o, "<td class=flagtxt>did not run: {}</td>", esc(e.lines().next().unwrap_or("")));
-        } else if bad.is_empty() {
+        } else if bad.is_empty() && dq.is_empty() && off.is_empty() {
             o.push_str("<td class=na>none</td>");
         } else {
-            let _ = write!(o, "<td class=flagtxt>{}</td>", esc(&bad.join(", ")));
+            o.push_str("<td class=flagtxt>");
+            if !dq.is_empty() {
+                let _ = write!(o, "<b>DQ</b> {}. ", esc(&dq.join(", ")));
+            }
+            if !bad.is_empty() {
+                let _ = write!(o, "failures: {}. ", esc(&bad.join(", ")));
+            }
+            if !off.is_empty() {
+                let _ = write!(o, "<span class=offl>offloads: {}</span>", esc(&off.join(", ")));
+            }
+            o.push_str("</td>");
         }
         o.push_str("</tr>");
     }
@@ -289,6 +331,7 @@ h3{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--ink);font:600
 .axis .track{height:18px}
 .axis em{position:absolute;top:2px;transform:translateX(-50%);font:11px var(--mono);font-style:normal;color:var(--dim);white-space:nowrap}
 .fails{margin:6px 0 0;color:var(--bad);font-size:12px;line-height:1.35}
+.offl{margin:6px 0 0;color:#8a5a00;font-size:12px;line-height:1.35}
 .sum table{border-collapse:collapse;width:100%}
 .sum th{font-weight:500;color:var(--dim);text-align:right;padding:6px 14px 6px 0;border-bottom:1px solid var(--ink);font-size:12.5px}
 .sum td{padding:7px 14px 7px 0;border-bottom:1px solid var(--rule);text-align:right;vertical-align:middle}
@@ -297,6 +340,7 @@ h3{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--ink);font:600
 .sum td.srv{font-weight:600}
 .sum td.num{font:12.5px var(--mono)}
 .sum td.na{color:var(--dim)}
+.sum td.flagtxt .offl{margin:0}
 .sum td.flagtxt{color:var(--bad);font-size:12px;text-align:left;max-width:260px;white-space:normal}
 .sum th:last-child{text-align:left}
 .sum td:last-child{text-align:left}
@@ -478,6 +522,26 @@ mod tests {
         assert!(!html.contains("reference"));
         assert!(html.contains("a &lt;b&gt; note"));
         assert!(!html.contains("a <b> note"));
+    }
+
+    #[test]
+    fn disqualified_handler_is_marked_and_ranks_last() {
+        let mut rep = report();
+        rep.servers[1].results[0].skipped = Some("serves a redirect".into());
+        rep.servers[1].results[0].disqualified = true;
+        let html = page(&rep);
+        assert!(html.contains("DQ"));
+        assert!(html.contains("b: disqualified, serves a redirect"));
+        assert_eq!(geomean_order(&rep), vec![0, 1]);
+    }
+
+    #[test]
+    fn offloaded_handler_is_named_but_still_scored() {
+        let mut rep = report();
+        rep.servers[0].results[0].offloaded = Some("hands work to a queue".into());
+        let html = page(&rep);
+        assert!(html.contains("a: offloaded, hands work to a queue"));
+        assert!(html.contains("offloads: get-1k"));
     }
 
     #[test]

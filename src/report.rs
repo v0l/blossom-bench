@@ -69,6 +69,9 @@ fn failure_rate(r: &WorkloadResult) -> f64 {
 
 fn cell_rate(r: Option<&WorkloadResult>, base: Option<&WorkloadResult>) -> String {
     let Some(r) = r else { return "n/a".into() };
+    if r.disqualified {
+        return "DQ".into();
+    }
     if let Some(s) = &r.skipped {
         return format!("skipped ({s})");
     }
@@ -195,6 +198,9 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
         for r in &sv.results {
             if let Some(e) = &r.error_sample {
                 notes.push(format!("- `{}` / {}: first failure was {}", sv.name, r.name, e));
+            }
+            if let Some(why) = &r.offloaded {
+                notes.push(format!("- `{}` / {}: offloads work, {}", sv.name, r.name, why));
             }
             if r.skipped.is_none() && r.load_gen_util > 0.85 {
                 notes.push(format!(

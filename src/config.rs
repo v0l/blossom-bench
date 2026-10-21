@@ -20,11 +20,27 @@ pub struct ServerDef {
     #[serde(default)]
     pub follow_redirects: bool,
     #[serde(default)]
+    pub offloaded: Vec<Offload>,
+    #[serde(default)]
     pub after_ready: Vec<Hook>,
     #[serde(default)]
     pub upload: UploadSpec,
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Offload {
+    pub kind: Kind,
+    #[serde(default)]
+    pub disqualify: bool,
+    pub reason: String,
+}
+
+impl ServerDef {
+    pub fn offload(&self, kind: Kind) -> Option<&Offload> {
+        self.offloaded.iter().find(|o| o.kind == kind)
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -213,6 +229,17 @@ mod tests {
             "{RUN}[[workload]]\nname=\"p\"\nkind=\"upload\"\nsize=10\ncount=2\n[[workload]]\nname=\"g\"\nkind=\"get\"\nblobs=[\"p\"]\n"
         );
         assert_eq!(suite(&good).unwrap().workloads.len(), 2);
+    }
+
+    #[test]
+    fn offload_is_looked_up_by_handler_kind() {
+        let def: ServerDef = toml::from_str(
+            "name=\"x\"\n[[offloaded]]\nkind=\"get\"\ndisqualify=true\nreason=\"redirects\"\n[[offloaded]]\nkind=\"upload\"\nreason=\"queues\"\n",
+        )
+        .unwrap();
+        assert!(def.offload(Kind::Get).unwrap().disqualify);
+        assert!(!def.offload(Kind::Upload).unwrap().disqualify);
+        assert!(def.offload(Kind::Head).is_none());
     }
 
     #[test]

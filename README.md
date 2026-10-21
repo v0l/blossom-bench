@@ -33,7 +33,13 @@ Servers are started from an empty data directory for each run, and a failing res
 server and load generator never share a core. If the load generator is more than 85%
 busy on its cores, the report says the number may be its limit.
 
-Rule for inclusion: the server itself must answer `GET /<sha256>` with the blob bytes.
+Rule for inclusion: the server itself must do the work of each handler. A handler that hands the
+work to another codebase is marked in `server.toml` under `[[offloaded]]` with a `kind` (`upload`,
+`get`, `head`, `miss`) and a `reason`. With `disqualify = true` the workloads of that kind are not
+run and the report shows DQ for them, and the server is listed after the others. Without it the
+workload runs and is scored, and the report names what it offloads (amber text under the chart,
+and in the summary's problems column). `GET` must return the bytes: a redirect to another server
+is a disqualification.
 
 ## Workloads
 
@@ -61,7 +67,7 @@ Make `servers/<name>/` with:
   (`build.context`) with either its own Dockerfile or `dockerfile_inline`, or use a
   published `image`.
 - `server.toml`: `name`, `port`, `ready_path`, `notes`, `startup_timeout_s`, `data_dirs`
-  (created empty under the data dir), `follow_redirects` (for a server whose GET redirects to the bytes), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
+  (created empty under the data dir), `follow_redirects` (for a server whose GET redirects to the bytes), `[[offloaded]]` (`kind`, `reason`, `disqualify`), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
   server answers, for seeding) and `[upload]`: `path`, `auth = "std" | "url"` base64
   alphabet, `bound_auth` (sign `server`, `u` and `method` tags), `sha_header`,
   `content_type`, `content` (`random`, `text`, `png`), `settle_s`.
@@ -84,12 +90,16 @@ Not included: satellite-cdn, which needs Cloudflare R2, and nostrbuild/nostr.bui
 only the PHP backend behind a Cloudflare Worker proxy (it answers uploads over HMAC-signed
 requests from that Worker and has no public blob GET of its own).
 
-Disqualified: PrimalHQ/primal-blossom-server. It does not serve blobs itself: GET answers 302 to a
-separate media server (nginx in production), so the Blossom server only does the lookup. Every
-included server answers GET with the bytes, so a server that cannot is not compared. Its compose
-project is kept in `disqualified/` and can be run with `--servers disqualified`; the load generator
-follows the redirect (`follow_redirects = true`) and counts a GET only when the final response has
-the right bytes. Its schema file lacks four tables its queries use, which `files/schema.sql` adds.
+PrimalHQ/primal-blossom-server is included with its read workloads disqualified: GET answers 302
+to a separate media server (nginx in the compose project), so the Blossom code never sends the
+file. Its uploads, HEAD and misses are its own and are scored, with the upload handler marked as
+offloading media processing to a Julia worker that is not run here. `follow_redirects = true`
+makes the load generator follow a redirect and count a GET only when the final response has the
+right bytes, which is how the disqualified rows were measured before. Its schema file lacks four
+tables its queries use, which `files/schema.sql` adds.
+
+nostrcheck-server is marked as offloading uploads: it answers 202 and finishes the work in a
+background queue, in the same container.
 
 Needs docker with the compose plugin. Images are cached between runs; `--rebuild` rebuilds them without cache.
 

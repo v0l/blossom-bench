@@ -179,6 +179,7 @@ async fn main() -> Result<()> {
                     match workloads::execute(&mut ctx, w, run.seed.wrapping_add(wi as u64)).await {
                         Ok(r) => {
                             match &r.skipped {
+                                Some(why) if r.disqualified => eprintln!(" DQ: {why}"),
                                 Some(why) => eprintln!(" skipped: {why}"),
                                 None => eprintln!(
                                     " {:>9.0}/s ok={}/{} p99={}us cpu={:.2}",

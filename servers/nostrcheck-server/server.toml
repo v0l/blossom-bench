@@ -8,6 +8,10 @@ startup_timeout_s = 240
 service = "mariadb"
 cmd = "mariadb -uroot -proot nostrcheck -e \"insert into registered (pubkey, hex, username, password, domain, active, date, allowed, checked) values ('${BB_PUBKEY}', '${BB_PUBKEY}', 'bench', '', '127.0.0.1', 1, now(), 1, 1)\""
 
+[[offloaded]]
+kind = "upload"
+reason = "answers 202 and finishes the work in a background queue (no ffmpeg for these text files, since uploads set no_transform), inside the same container so its CPU is counted; readback waits settle_s for the queue"
+
 [upload]
 path = "/api/v2/media/upload"
 content_type = "text/plain"

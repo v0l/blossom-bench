@@ -1,0 +1,20 @@
+name = "primal-blossom-server"
+port = 18113
+notes = "PrimalHQ/primal-blossom-server, Rust + axum + Postgres. Uploads, HEAD and lookups are served by the server itself. GET is not: it answers 302 to a separate media server (nginx here), so the Blossom code never sends the file. Several tables its queries need are missing from its schema.sql and were reconstructed from the SQL. Only text and image content is accepted"
+startup_timeout_s = 240
+data_dirs = ["media", "tmp", "procgraph"]
+follow_redirects = true
+
+[[offloaded]]
+kind = "get"
+disqualify = true
+reason = "does not serve the file: GET answers 302 to a separate media server"
+
+[[offloaded]]
+kind = "upload"
+reason = "runs the file command per upload to sniff the type, and queues media processing for a separate Julia worker that is not run here, so that work is not measured"
+
+[upload]
+content = "text"
+content_type = "text/plain"
+settle_s = 2
