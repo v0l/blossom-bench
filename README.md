@@ -72,8 +72,8 @@ the same key in bech32.
 
 route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
 MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
-servus-social/servus, Sakura (Odin), barrydeen/haven (which also covers khatru's Blossom package)
-and damus-io/afterbloom.
+servus-social/servus, Sakura (Odin), barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
+package), and damus-io/afterbloom.
 
 Not included: satellite-cdn, which needs Cloudflare R2. PrimalHQ/primal-blossom-server needs
 Postgres tables that its schema file does not define and answers GET with a redirect to a separate
