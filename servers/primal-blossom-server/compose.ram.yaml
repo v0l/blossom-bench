@@ -1,0 +1,3 @@
+services:
+  postgres:
+    tmpfs: ["/var/lib/postgresql/data:size=6g"]

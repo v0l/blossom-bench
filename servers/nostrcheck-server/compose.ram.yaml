@@ -1,0 +1,3 @@
+services:
+  mariadb:
+    tmpfs: ["/var/lib/mysql:size=6g"]

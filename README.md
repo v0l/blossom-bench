@@ -104,20 +104,22 @@ background queue, in the same container.
 
 Needs docker with the compose plugin. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
-## Forcing durable writes
+## Even durability: data in RAM
 
-`scripts/syncfs.sh up` makes an ext4 image and mounts it with the `sync` option at
-`/tmp/blossom-bench-sync`. `blossom-bench run --sync-data /tmp/blossom-bench-sync` puts every
-server's data dir there, so every blob and every SQLite or LMDB file it writes reaches disk before
-the write returns, whatever the server asks for. The run refuses to start if the path is not on a
-sync mount, and the report header says which mode was used. `scripts/syncfs.sh down` removes it.
+By default each server keeps its own durability settings on disk: afterbloom, haven and blossom-rs
+sync each blob file, ditto-blossom batches a `syncfs`, and sakura, cherry-server, pyramid, primal and
+route96 write without any sync. Their upload rates are not comparable.
 
-This is an approximation of "durable before the ack", and a harsh one: the sync mount makes every
-write call synchronous, including each metadata update, and the loop device doubles the journal
-work, so a small write costs about 13 ms here against about 5 ms for a real fsync on this NVMe.
-The cost is the same for every server, but servers that issue several writes per upload pay more
-than ones that issue one. Databases that run in their own container (MariaDB, Postgres, Redis)
-keep their own data in the container and their own durability settings.
+`blossom-bench run --ram-data /dev/shm/blossom-bench` removes the difference. Every server's data
+dir goes on tmpfs, and the databases that run in their own container (MariaDB, Postgres) get a
+tmpfs data dir through their `compose.ram.yaml`. Writes are then asynchronous for everyone and an
+`fsync` costs nothing, so no server is ahead because it skips a sync and none is behind because it
+issues one. The run refuses to start unless the path is on tmpfs, and the report header says which
+mode was used. Results go to `latest-ram.html` so they never replace the default run.
+
+What it does not measure: the real cost of durability. It measures the software, not the disk.
+Blob data counts as memory, so a run needs a few GiB free in `/dev/shm` (the standard suite writes
+about 1 GiB of blobs per server, removed after each server finishes).
 
 ## Caveats
 
@@ -125,5 +127,5 @@ Everything runs over loopback, so network and TLS costs are absent. Uploads are
 one signature per blob, made before timing starts. By default servers run with their own
 durability settings, which differ a lot: afterbloom, haven and blossom-rs sync each blob file,
 ditto-blossom batches a `syncfs`, and sakura, cherry-server, pyramid, primal and route96 write
-without any sync, so their upload rates are not comparable. Run with `--sync-data` to remove that
-difference (below). The Deno server can also answer 503 under load. Treat the ratios as indicative and rerun on the hardware that matters.
+without any sync, so their upload rates are not comparable. Run with `--ram-data` to remove that
+difference (above). The Deno server can also answer 503 under load. Treat the ratios as indicative and rerun on the hardware that matters.

@@ -422,7 +422,7 @@ pub fn page(rep: &Report) -> String {
         esc(&rep.load_cpus),
         rep.connections,
         rep.host_cpus,
-        if rep.sync_data { "<span class=dqt>data dir forced to sync</span>" } else { "" },
+        if rep.ram_data { "<span class=dqt>all data in RAM, fsync is free</span>" } else { "" },
         if rep.host_busy_pct > 5.0 { format!("<span class=flagtxt>benchmark CPUs {:.0}% busy with other work: numbers unreliable</span>", rep.host_busy_pct) } else { String::new() }
     );
     summary(&mut o, rep, &order);
@@ -533,7 +533,7 @@ mod tests {
             load_cpus: "4-7".into(),
             connections: 8,
             suite: "s".into(),
-            sync_data: false,
+            ram_data: false,
             host_busy_pct: 0.0,
             servers: vec![run("a", 1000.0), run("b", 2000.0)],
         }

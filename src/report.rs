@@ -21,7 +21,7 @@ pub struct Report {
     pub connections: usize,
     pub suite: String,
     #[serde(default)]
-    pub sync_data: bool,
+    pub ram_data: bool,
     #[serde(default)]
     pub host_busy_pct: f64,
     pub servers: Vec<ServerRun>,
@@ -117,7 +117,7 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
         rep.load_cpus,
         rep.connections,
         rep.host_cpus,
-        if rep.sync_data { "forced sync, every write reaches disk" } else { "default, writes may sit in the page cache" }
+        if rep.ram_data { "tmpfs in RAM for every server and database, so fsync is free for all" } else { "default, each server keeps its own durability settings on disk" }
     );
     if rep.host_busy_pct > 5.0 {
         let _ = writeln!(s, "Warning: the benchmark CPUs were {:.0}% busy with other work before the run, so these numbers are unreliable.\n", rep.host_busy_pct);
@@ -267,7 +267,7 @@ mod tests {
             load_cpus: "4-7".into(),
             connections: 64,
             suite: "t".into(),
-            sync_data: false,
+            ram_data: false,
             host_busy_pct: 0.0,
             servers,
         }

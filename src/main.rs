@@ -43,8 +43,8 @@ enum Cmd {
         rebuild: bool,
         #[arg(long, help = "Run even if the benchmark CPUs are busy with other work")]
         allow_busy: bool,
-        #[arg(long, help = "Put every server's data dir on this path, which must be a filesystem mounted with sync (see scripts/syncfs.sh)")]
-        sync_data: Option<PathBuf>,
+        #[arg(long, help = "Keep every server's data dir, and its databases' data, in RAM under this tmpfs path (for example /dev/shm/blossom-bench), so no server waits on a disk and fsync is free for all")]
+        ram_data: Option<PathBuf>,
         #[arg(long)]
         server_cpus: Option<String>,
         #[arg(long)]
@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, allow_busy, sync_data, server_cpus, load_cpus, duration, connections } => {
+        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, allow_busy, ram_data, server_cpus, load_cpus, duration, connections } => {
             let mut suite_def = config::load_suite(&suite)?;
             if let Some(v) = server_cpus {
                 suite_def.run.server_cpus = v;
@@ -142,9 +142,10 @@ async fn main() -> Result<()> {
                 }
                 eprintln!("warning: {msg}");
             }
-            let data_root = match &sync_data {
+            let data_root = match &ram_data {
                 Some(path) => {
-                    sys::require_sync_mount(path)?;
+                    std::fs::create_dir_all(path)?;
+                    sys::require_tmpfs(path)?;
                     path.clone()
                 }
                 None => work.join("data"),
@@ -157,7 +158,7 @@ async fn main() -> Result<()> {
                 load_cpus: run.load_cpus.clone(),
                 connections: run.connections,
                 suite: suite.display().to_string(),
-                sync_data: sync_data.is_some(),
+                ram_data: ram_data.is_some(),
                 host_busy_pct: busy,
                 servers: Vec::new(),
             };
@@ -167,7 +168,7 @@ async fn main() -> Result<()> {
                 let port = if def.port != 0 { def.port } else { 18100 + i as u16 };
                 let signer = nostr::Signer::fixed()?;
                 let vars = Vars { port, data: data_root.join(&def.name), pubkey: signer.pubkey_hex.clone() };
-                let limits = runner::Limits { server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory };
+                let limits = runner::Limits { ram_data: ram_data.is_some(), server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory };
                 if let Err(e) = runner::build(def, &work, &vars, &limits, rebuild) {
                     eprintln!("  build failed: {e:#}");
                     report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error: Some(format!("build failed: {e:#}")), results: vec![] });
@@ -221,7 +222,7 @@ async fn main() -> Result<()> {
                 report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error, results });
             }
 
-            let latest = if sync_data.is_some() { "latest-sync" } else { "latest" };
+            let latest = if ram_data.is_some() { "latest-ram" } else { "latest" };
             let stamp = report.when.replace([' ', ':'], "-");
             let json_path = out.join(format!("{stamp}.json"));
             std::fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;

@@ -34,7 +34,7 @@ pub fn set_affinity(cpus: &[usize]) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn require_sync_mount(path: &std::path::Path) -> Result<()> {
+pub fn require_tmpfs(path: &std::path::Path) -> Result<()> {
     let real = std::fs::canonicalize(path)?;
     let info = std::fs::read_to_string("/proc/self/mountinfo")?;
     let best = info
@@ -42,15 +42,14 @@ pub fn require_sync_mount(path: &std::path::Path) -> Result<()> {
         .filter_map(|l| {
             let f: Vec<&str> = l.split(' ').collect();
             let mount = f.get(4)?;
-            let opts = f.get(5)?;
             let after = f.iter().position(|x| *x == "-")?;
-            let super_opts = f.get(after + 3)?;
-            real.starts_with(mount).then(|| (mount.len(), format!("{opts},{super_opts}")))
+            let fstype = f.get(after + 1)?;
+            real.starts_with(mount).then(|| (mount.len(), fstype.to_string()))
         })
         .max_by_key(|(len, _)| *len);
     match best {
-        Some((_, opts)) if opts.split(',').any(|o| o == "sync" || o == "dirsync") => Ok(()),
-        Some((_, opts)) => bail!("{} is not on a filesystem mounted with sync ({opts}); run scripts/syncfs.sh up", real.display()),
+        Some((_, fstype)) if fstype == "tmpfs" || fstype == "ramfs" => Ok(()),
+        Some((_, fstype)) => bail!("{} is on a {fstype} filesystem, not tmpfs; use a path under /dev/shm", real.display()),
         None => bail!("cannot find the mount of {}", real.display()),
     }
 }
@@ -217,9 +216,19 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn plain_tmp_is_not_a_sync_mount() {
-        let dir = std::env::temp_dir();
-        assert!(super::require_sync_mount(&dir).is_err());
+    fn a_disk_directory_is_not_tmpfs() {
+        let dir = std::env::current_dir().unwrap();
+        let on_disk = !std::fs::read_to_string("/proc/self/mountinfo").unwrap().lines().any(|l| l.contains(" tmpfs ") && dir.starts_with(l.split(' ').nth(4).unwrap_or("/nonexistent")) && l.split(' ').nth(4) != Some("/"));
+        if on_disk {
+            assert!(super::require_tmpfs(&dir).is_err());
+        }
+    }
+
+    #[test]
+    fn dev_shm_is_tmpfs() {
+        if std::path::Path::new("/dev/shm").is_dir() {
+            assert!(super::require_tmpfs(std::path::Path::new("/dev/shm")).is_ok());
+        }
     }
 
     use super::*;

@@ -44,12 +44,16 @@ struct Project {
     name: String,
     dir: PathBuf,
     env: Vec<(String, String)>,
+    ram_override: Option<PathBuf>,
 }
 
 impl Project {
     fn compose(&self) -> StdCommand {
         let mut cmd = StdCommand::new("docker");
         cmd.args(["compose", "-p", &self.name, "--project-directory"]).arg(&self.dir).arg("-f").arg(self.dir.join("compose.yaml"));
+        if let Some(extra) = &self.ram_override {
+            cmd.arg("-f").arg(extra);
+        }
         for (k, v) in &self.env {
             cmd.env(k, v);
         }
@@ -73,6 +77,7 @@ fn run_cmd(cmd: &mut StdCommand, log: &Path) -> Result<()> {
 }
 
 pub struct Limits<'a> {
+    pub ram_data: bool,
     pub server_cpus: &'a [usize],
     pub service_cpus: &'a [usize],
     pub memory: &'a str,
@@ -101,6 +106,7 @@ fn project(def: &ServerDef, work: &Path, vars: &Vars, limits: &Limits<'_>) -> Pr
     Project {
         name: format!("bb-{}", def.name),
         dir: def.dir.clone(),
+        ram_override: Some(def.dir.join("compose.ram.yaml")).filter(|p| limits.ram_data && p.is_file()),
         env: vec![
             ("BB_PORT".into(), vars.port.to_string()),
             ("BB_DATA".into(), vars.data.to_string_lossy().into_owned()),
