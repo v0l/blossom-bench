@@ -42,44 +42,53 @@ makes compressible bodies.
 
 ## How servers are run
 
-Every server and every database runs in a Docker container, started the same way:
-host networking, `--cpuset-cpus` for its CPU list, the same memory cap and file
-limit, and the caller's uid. Images are built from the project's own source with a
-Dockerfile written in the server definition (or the project's own Dockerfile), or
-pulled when the project publishes one. Databases and caches get their own cores
-(`service_cpus`) and count towards the server's CPU and memory.
+Every server is a Docker Compose project in `servers/<name>/`. The server container and
+each database or cache it needs get host networking, the same memory cap and file limit,
+and a fixed set of cores: the server on `server_cpus`, everything else on `service_cpus`.
+`servers/common.yaml` holds those limits as two services (`app` and `aux`) that each
+compose file extends, so no server can run with different limits. Databases count towards
+the server's CPU and memory.
 
 ## Adding a server
 
-Drop a file in `servers/`. Fields:
+Make `servers/<name>/` with:
 
-- `name`, `port`, `ready_path`, `notes`
-- `[source]`: `git` (with optional `rev`) or `path`; it becomes the docker build context
-- `[image]`: `dockerfile_inline`, `dockerfile` (relative to the source) or `prebuilt`
-- `[[services]]`: containers started first (`image`, `args`, `env`, `ready_cmd`)
-- `[[files]]`: config files written into the data dir before start
-- `[[after_ready]]`: `service` + `cmd` run with `docker exec` once the server answers, for seeding
-- `[run]`: `cmd`, `entrypoint`, `env`, `mounts`, `startup_timeout_s`
-- `[upload]`: `path`, `auth = "std" | "url"` base64 alphabet, `bound_auth` (sign `server`, `u` and
-  `method` tags), `sha_header`, `content_type`, `content` (`random`, `text`, `png`), `settle_s`
-- `url = "http://host:port"` instead of a source benchmarks a server that is already running
+- `compose.yaml`: a service named `server` that extends `../common.yaml` service `app`,
+  plus any databases extending `aux`. Give databases a healthcheck and make `server`
+  depend on them with `condition: service_healthy`. Build from the project's git URL
+  (`build.context`) with either its own Dockerfile or `dockerfile_inline`, or use a
+  published `image`.
+- `server.toml`: `name`, `port`, `ready_path`, `notes`, `startup_timeout_s`, `data_dirs`
+  (created empty under the data dir), `get_status` (set to 302 for a server whose GET
+  redirects), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
+  server answers, for seeding) and `[upload]`: `path`, `auth = "std" | "url"` base64
+  alphabet, `bound_auth` (sign `server`, `u` and `method` tags), `sha_header`,
+  `content_type`, `content` (`random`, `text`, `png`), `settle_s`.
+- `files/`: copied into the data dir before start, which the server sees at `/data`.
 
-`{port}`, `{data}`, `{src}`, `{pubkey}` and `{npub}` are expanded in args, env, files and hooks. `{pubkey}` is the
-fixed benchmark key that signs every upload, so a server can allow-list or register it. `{npub}` is
-the same key in bech32.
+`${BB_PORT}`, `${BB_PUBKEY}` and `${BB_NPUB}` are also expanded inside `files/` and
+`[[after_ready]]` commands. Compose sees `BB_PORT`, `BB_DATA`, `BB_PUBKEY`, `BB_NPUB`,
+`BB_UID`, `BB_SERVER_CPUS`, `BB_SERVICE_CPUS` and `BB_MEMORY`. `BB_PUBKEY` is the fixed
+benchmark key that signs every upload, so a server can allow-list or register it.
+`BB_NPUB` is the same key in bech32.
 
 ## Included servers
 
 route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
 MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
 servus-social/servus, Sakura (Odin), barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
-package), and damus-io/afterbloom.
+package), damus-io/afterbloom and PrimalHQ/primal-blossom-server.
 
-Not included: satellite-cdn, which needs Cloudflare R2. PrimalHQ/primal-blossom-server needs
-Postgres tables that its schema file does not define and answers GET with a redirect to a separate
-media server. nostrbuild/nostr.build needs PHP, MariaDB and S3-compatible storage.
+Not included: satellite-cdn, which needs Cloudflare R2, and nostrbuild/nostr.build, whose repo holds
+only the PHP backend behind a Cloudflare Worker proxy (it answers uploads over HMAC-signed
+requests from that Worker and has no public blob GET of its own).
 
-Needs docker. Images are cached between runs; `--rebuild` rebuilds them without cache.
+PrimalHQ/primal-blossom-server answers GET with a 302 to a separate media server, which the
+compose project runs as nginx, so its get rows measure the redirect lookup and not the bytes.
+Readback checks follow the redirect and hash the real file. Its schema file lacks four tables that
+its queries use, which `files/schema.sql` adds.
+
+Needs docker with the compose plugin. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
 ## Caveats
 

@@ -136,14 +136,36 @@ fn skipped(w: &Workload, why: &str) -> WorkloadResult {
     }
 }
 
+async fn follow_redirect(ctx: &Ctx<'_>, b: &Blob) -> bool {
+    let Ok((status, Some(location))) = load::fetch_location(ctx.addr, &format!("/{}", b.hash)).await else {
+        return false;
+    };
+    if status != ctx.def.get_status {
+        return false;
+    }
+    let target = location.trim_start_matches("http://");
+    let (host, path) = target.split_once('/').map_or((target, String::new()), |(h, p)| (h, format!("/{p}")));
+    let Some(addr) = tokio::net::lookup_host(host).await.ok().and_then(|mut a| a.next()) else {
+        return false;
+    };
+    match load::fetch(addr, &path).await {
+        Ok((200, body)) => hex::encode(Sha256::digest(&body)) == b.hash && body.len() as u64 == b.size,
+        _ => false,
+    }
+}
+
 async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) {
     let mut bad = 0;
     let n = ctx.run.verify.min(blobs.len());
     for _ in 0..n {
         let b = &blobs[(rng.next() % blobs.len() as u64) as usize];
-        let ok = match load::fetch(ctx.addr, &format!("/{}", b.hash)).await {
-            Ok((200, body)) => hex::encode(Sha256::digest(&body)) == b.hash && body.len() as u64 == b.size,
-            _ => false,
+        let ok = if ctx.def.get_status == 200 {
+            match load::fetch(ctx.addr, &format!("/{}", b.hash)).await {
+                Ok((200, body)) => hex::encode(Sha256::digest(&body)) == b.hash && body.len() as u64 == b.size,
+                _ => false,
+            }
+        } else {
+            follow_redirect(ctx, b).await
         };
         if !ok {
             bad += 1;
@@ -156,6 +178,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
     let mut rng = Rng(seed ^ 0x9E3779B97F4A7C15 | 1);
     let conns = w.connections.unwrap_or(ctx.run.connections);
     let host = ctx.addr.ip().to_string();
+    let get_status = ctx.def.get_status;
     let bound = ctx.def.upload.bound_auth.then(|| format!("http://{}", ctx.addr));
 
     let (mut plan_blobs, mut upload_all): (Vec<Blob>, Vec<Blob>) = (Vec::new(), Vec::new());
@@ -249,9 +272,9 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                             uri: format!("/{}", b.hash).parse().expect("uri"),
                             headers: headers(addr),
                             body: Bytes::new(),
-                            ok_lo: 200,
-                            ok_hi: 200,
-                            expect_len: if kind == Kind::Get { Some(b.size) } else { None },
+                            ok_lo: get_status,
+                            ok_hi: get_status,
+                            expect_len: if kind == Kind::Get && get_status == 200 { Some(b.size) } else { None },
                         })
                         .collect(),
                 };

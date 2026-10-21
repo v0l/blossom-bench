@@ -1,0 +1,11 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/hzrd149/blossom-server.git#v6.3.1"
+      dockerfile: "Dockerfile"
+    image: bb-blossom-deno:bench
+    entrypoint: ["deno"]
+    command: ["run", "-P", "--config", "/app/deno.json", "/app/main.ts"]
+    environment:
+      HOME: "/data"

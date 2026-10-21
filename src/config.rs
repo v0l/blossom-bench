@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,76 +13,24 @@ pub struct ServerDef {
     pub ready_path: String,
     #[serde(default)]
     pub notes: String,
-    pub source: Option<Source>,
-    pub image: Option<Image>,
+    #[serde(default = "default_startup")]
+    pub startup_timeout_s: u64,
     #[serde(default)]
-    pub services: Vec<Service>,
-    #[serde(default)]
-    pub files: Vec<FileSpec>,
+    pub data_dirs: Vec<String>,
+    #[serde(default = "ok_status")]
+    pub get_status: u16,
     #[serde(default)]
     pub after_ready: Vec<Hook>,
     #[serde(default)]
-    pub run: RunSpec,
-    #[serde(default)]
     pub upload: UploadSpec,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct Source {
-    pub git: Option<String>,
-    pub path: Option<String>,
-    pub rev: Option<String>,
-}
-
-#[derive(Deserialize, Clone, Debug, Default)]
-pub struct Image {
-    pub prebuilt: Option<String>,
-    pub dockerfile: Option<String>,
-    pub dockerfile_inline: Option<String>,
-    #[serde(default)]
-    pub build_args: HashMap<String, String>,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct Service {
-    pub name: String,
-    pub image: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    pub ready_cmd: String,
+    #[serde(skip)]
+    pub dir: PathBuf,
 }
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Hook {
     pub service: String,
     pub cmd: String,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct FileSpec {
-    pub path: String,
-    pub content: String,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct RunSpec {
-    pub entrypoint: Option<String>,
-    #[serde(default)]
-    pub cmd: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub mounts: Vec<String>,
-    #[serde(default = "default_startup")]
-    pub startup_timeout_s: u64,
-}
-
-impl Default for RunSpec {
-    fn default() -> Self {
-        Self { entrypoint: None, cmd: vec![], env: HashMap::new(), mounts: vec![], startup_timeout_s: default_startup() }
-    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -116,6 +63,9 @@ impl Default for UploadSpec {
     }
 }
 
+fn ok_status() -> u16 {
+    200
+}
 fn root_path() -> String {
     "/".into()
 }
@@ -206,12 +156,15 @@ pub fn load_servers(dir: &Path) -> Result<Vec<ServerDef>> {
     let mut defs = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+        let manifest = path.join("server.toml");
+        if !manifest.is_file() {
             continue;
         }
-        let text = std::fs::read_to_string(&path)?;
-        let def: ServerDef =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let text = std::fs::read_to_string(&manifest)?;
+        let mut def: ServerDef =
+            toml::from_str(&text).with_context(|| format!("parsing {}", manifest.display()))?;
+        anyhow::ensure!(path.join("compose.yaml").is_file(), "{} has no compose.yaml", path.display());
+        def.dir = path;
         defs.push(def);
     }
     defs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -277,6 +230,12 @@ mod tests {
         for s in ["standard", "quick"] {
             load_suite(&root.join(format!("suites/{s}.toml"))).unwrap();
         }
-        assert!(!load_servers(&root.join("servers")).unwrap().is_empty());
+        let servers = load_servers(&root.join("servers")).unwrap();
+        assert!(!servers.is_empty());
+        for d in servers {
+            let compose = std::fs::read_to_string(d.dir.join("compose.yaml")).unwrap();
+            assert!(compose.contains("\n  server:"), "{} needs a service named server", d.name);
+            assert!(d.dir.file_name().unwrap().to_string_lossy() == d.name, "{} folder name differs", d.name);
+        }
     }
 }

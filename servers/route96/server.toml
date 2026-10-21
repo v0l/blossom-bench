@@ -1,0 +1,3 @@
+name = "route96"
+port = 18101
+notes = "built with --features blossom; MariaDB on its own cores"

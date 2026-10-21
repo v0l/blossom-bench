@@ -1,0 +1,17 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/MonumentalSystems/blossom-rs.git"
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN cargo build --release -p blossom-server
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/blossom-server /usr/local/bin/blossom-server
+    image: bb-blossom-rs:bench
+    command: ["blossom-server", "--bind", "127.0.0.1:${BB_PORT}", "--base-url", "http://127.0.0.1:${BB_PORT}", "--data-dir", "/data/blobs", "--db-path", "/data/blossom.db", "--allow-insecure-public-http", "--no-rate-limit", "--no-locks", "--admin", "${BB_PUBKEY}"]
+    environment:
+      RUST_LOG: "warn"

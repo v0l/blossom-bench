@@ -1,0 +1,1 @@
+{"domain": "127.0.0.1:${BB_PORT}", "relay_name": "bench", "relay_internal_secret_key": "0000000000000000000000000000000000000000000000000000000000000001", "blossom": {"enabled": true}}

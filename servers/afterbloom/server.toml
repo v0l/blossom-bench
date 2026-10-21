@@ -1,0 +1,6 @@
+name = "afterbloom"
+port = 18111
+notes = "damus-io/afterbloom, Rust + axum, no database, blobs are files with a symlink per owner. Built for expiring blobs. Per-IP upload rate limit and byte budget raised out of the way"
+
+[upload]
+auth = "std"

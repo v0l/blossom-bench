@@ -1,0 +1,25 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    image: "nostrcheckme/nostrcheck-server:latest"
+    entrypoint: ["sh"]
+    command: ["-c", "mkdir -p /data/files /data/tmp /data/logs && cd /usr/src/app && for i in 1 2 3; do npm start; done"]
+    environment:
+      HOME: "/data"
+    volumes: ["${BB_DATA}/config:/usr/src/app/config"]
+    depends_on:
+      mariadb: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  mariadb:
+    extends: {file: ../common.yaml, service: aux}
+    image: "mariadb:latest"
+    command: ["--bind-address=127.0.0.1"]
+    environment:
+      MARIADB_ROOT_PASSWORD: "root"
+      MARIADB_DATABASE: "nostrcheck"
+    healthcheck: {test: ["CMD-SHELL", "mariadb -uroot -proot -e 'select 1'"], interval: 1s, timeout: 5s, retries: 120}
+  redis:
+    extends: {file: ../common.yaml, service: aux}
+    image: "redis:7-alpine"
+    command: ["redis-server", "--bind", "127.0.0.1", "--save", ""]
+    healthcheck: {test: ["CMD-SHELL", "redis-cli ping"], interval: 1s, timeout: 5s, retries: 120}

@@ -1,0 +1,15 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/soapbox-pub/ditto-blossom.git"
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN cargo build --release 
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/ditto-blossom /usr/local/bin/ditto-blossom
+    image: bb-ditto-blossom:bench
+    command: ["ditto-blossom", "-c", "/data/config.toml"]

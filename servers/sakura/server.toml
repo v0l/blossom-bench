@@ -1,0 +1,6 @@
+name = "sakura"
+port = 18109
+notes = "Sakura, a Blossom server in Odin. One epoll worker per CPU, per-worker blob cache, sendfile, own secp256k1 and SHA-256. Fixed 4 workers to match the CPU pin"
+
+[upload]
+auth = "std"

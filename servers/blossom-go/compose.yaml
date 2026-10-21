@@ -1,0 +1,17 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/sebdeveloper6952/blossom-server.git"
+      dockerfile_inline: |
+        FROM golang:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN CGO_ENABLED=1 go build -o /out/blossom-go ./cmd/api
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /out/blossom-go /usr/local/bin/blossom-go
+        COPY --from=build /src/db/migrations /migrations
+    image: bb-blossom-go:bench
+    entrypoint: ["sh"]
+    command: ["-c", "mkdir -p /data/db && ln -sfn /migrations /data/db/migrations && exec blossom-go"]

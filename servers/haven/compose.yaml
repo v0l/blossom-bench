@@ -1,0 +1,45 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/barrydeen/haven.git"
+      dockerfile_inline: |
+        FROM golang:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN CGO_ENABLED=1 go build -o /out/haven .
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /out/haven /usr/local/bin/haven
+        COPY --from=build /src/templates /templates
+    image: bb-haven:bench
+    entrypoint: ["sh"]
+    command: ["-c", "ln -sfn /templates /data/templates && exec haven"]
+    environment:
+      OWNER_NPUB: "${BB_NPUB}"
+      RELAY_URL: "127.0.0.1:${BB_PORT}"
+      RELAY_PORT: "${BB_PORT}"
+      RELAY_BIND_ADDRESS: "127.0.0.1"
+      DB_ENGINE: "lmdb"
+      BLOSSOM_PATH: "/data/blossom/"
+      PRIVATE_RELAY_NAME: "bench"
+      PRIVATE_RELAY_NPUB: "${BB_NPUB}"
+      PRIVATE_RELAY_DESCRIPTION: "bench"
+      PRIVATE_RELAY_ICON: ""
+      CHAT_RELAY_NAME: "bench"
+      CHAT_RELAY_NPUB: "${BB_NPUB}"
+      CHAT_RELAY_DESCRIPTION: "bench"
+      CHAT_RELAY_ICON: ""
+      OUTBOX_RELAY_NAME: "bench"
+      OUTBOX_RELAY_NPUB: "${BB_NPUB}"
+      OUTBOX_RELAY_DESCRIPTION: "bench"
+      OUTBOX_RELAY_ICON: ""
+      INBOX_RELAY_NAME: "bench"
+      INBOX_RELAY_NPUB: "${BB_NPUB}"
+      INBOX_RELAY_DESCRIPTION: "bench"
+      INBOX_RELAY_ICON: ""
+      IMPORT_START_DATE: "2024-01-01"
+      IMPORT_SEED_RELAYS_FILE: "/data/relays.json"
+      BLASTR_RELAYS_FILE: "/data/relays.json"
+      WOT_DEPTH: "0"
+      LOG_LEVEL: "ERROR"

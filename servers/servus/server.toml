@@ -1,0 +1,8 @@
+name = "servus"
+port = 18108
+notes = "servus-social/servus, a Rust CMS and relay with a small Blossom server, flat files on disk. Only PNG/JPEG/GIF/WebP/MP3 are accepted, so uploads carry a PNG header. Reads the whole blob per GET"
+ready_path = "/?bench.local"
+startup_timeout_s = 120
+
+[upload]
+content = "png"

@@ -1,0 +1,5 @@
+listen: "127.0.0.1:${BB_PORT}"
+database: "mysql://root:root@127.0.0.1:33781/route96"
+storage_dir: "/data/files"
+max_upload_bytes: 4000000000
+public_url: "http://127.0.0.1:${BB_PORT}"

@@ -1,0 +1,7 @@
+name = "blossom-rs"
+port = 18105
+notes = "MonumentalSystems/blossom-rs, SQLite metadata, rate limiter and locks off; buffers whole bodies in RAM with a fixed buffer budget"
+
+[upload]
+auth = "url"
+bound_auth = true

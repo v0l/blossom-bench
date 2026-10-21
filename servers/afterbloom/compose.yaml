@@ -1,0 +1,17 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/damus-io/afterbloom.git"
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN cargo build --release
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/afterbloom /usr/local/bin/afterbloom
+    image: bb-afterbloom:bench
+    command: ["afterbloom", "--config", "/data/config.toml"]
+    environment:
+      RUST_LOG: "warn"

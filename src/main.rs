@@ -73,12 +73,11 @@ async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::List { servers } => {
             for d in config::load_servers(&servers)? {
-                let how = match (&d.url, &d.source) {
-                    (Some(u), _) => format!("existing {u}"),
-                    (_, Some(s)) => format!("docker build {}", s.git.clone().or(s.path.clone()).unwrap_or_default()),
-                    _ => format!("docker image {}", d.image.as_ref().and_then(|i| i.prebuilt.clone()).unwrap_or_default()),
+                let how = match &d.url {
+                    Some(u) => format!("existing {u}"),
+                    None => format!("compose {}", d.dir.join("compose.yaml").display()),
                 };
-                println!("{:<16} {}", d.name, how);
+                println!("{:<18} {}", d.name, how);
             }
             Ok(())
         }
@@ -144,18 +143,15 @@ async fn main() -> Result<()> {
             for (i, def) in defs.iter().enumerate() {
                 eprintln!("== {}", def.name);
                 let port = if def.port != 0 { def.port } else { 18100 + i as u16 };
-                let built = if def.url.is_some() { Ok(std::path::PathBuf::new()) } else { runner::build_image(def, &work, rebuild) };
-                let src_dir = match built {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("  build failed: {e:#}");
-                        report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error: Some(format!("build failed: {e:#}")), results: vec![] });
-                        continue;
-                    }
-                };
                 let signer = nostr::Signer::fixed()?;
-                let vars = Vars { port, data: work.join("data").join(&def.name), src: src_dir, pubkey: signer.pubkey_hex.clone() };
-                let mut running = match runner::start(def, &work, &vars, &runner::Limits { server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory }).await {
+                let vars = Vars { port, data: work.join("data").join(&def.name), pubkey: signer.pubkey_hex.clone() };
+                let limits = runner::Limits { server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory };
+                if let Err(e) = runner::build(def, &work, &vars, &limits, rebuild) {
+                    eprintln!("  build failed: {e:#}");
+                    report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error: Some(format!("build failed: {e:#}")), results: vec![] });
+                    continue;
+                }
+                let mut running = match runner::start(def, &work, &vars, &limits).await {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("  start failed: {e:#}");

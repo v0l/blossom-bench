@@ -1,0 +1,7 @@
+{
+  "server": {"host": "127.0.0.1", "port": ${BB_PORT}, "tosFilePath": "resources/tos.md", "privacyFilePath": "resources/privacy.md", "availableModules": {"security": {"enabled": false}}},
+  "database": {"host": "127.0.0.1", "user": "root", "password": "root", "database": "nostrcheck"},
+  "storage": {"local": {"mediaPath": "/data/files/", "tempPath": "/data/tmp/"}},
+  "logger": {"logPath": "/data/logs/"},
+  "security": {"media": {"maxUploadsMinute": 100000000}, "maxDefaultRequestMinute": 100000000}
+}

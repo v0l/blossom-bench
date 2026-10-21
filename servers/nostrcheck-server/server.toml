@@ -1,0 +1,14 @@
+name = "nostrcheck-server"
+port = 18107
+notes = "quentintaranpino/nostrcheck-server published image, Node + MariaDB + Redis; security module (rate limiting) disabled, bench key registered, uploads go through /api/v2/media/upload which answers 202 and processes in the background; a missing hash returns 200 with a placeholder image, so the miss workload cannot pass"
+ready_path = "/api/v2/media"
+startup_timeout_s = 240
+
+[[after_ready]]
+service = "mariadb"
+cmd = "mariadb -uroot -proot nostrcheck -e \"insert into registered (pubkey, hex, username, password, domain, active, date, allowed, checked) values ('${BB_PUBKEY}', '${BB_PUBKEY}', 'bench', '', '127.0.0.1', 1, now(), 1, 1)\""
+
+[upload]
+path = "/api/v2/media/upload"
+content_type = "text/plain"
+settle_s = 40

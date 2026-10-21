@@ -1,0 +1,7 @@
+name = "haven"
+port = 18110
+notes = "bitvora/haven (khatru's Blossom package inside a Nostr relay). Blob bytes on disk, metadata in an LMDB event store. Uploads only from the owner key, relay import and web-of-trust sync pointed at an empty relay list"
+ready_path = "/"
+
+[upload]
+auth = "std"

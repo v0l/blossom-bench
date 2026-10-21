@@ -1,0 +1,11 @@
+{
+  "port": ${BB_PORT},
+  "base_url": "http://127.0.0.1:${BB_PORT}",
+  "media_server_url": "http://127.0.0.1:18114",
+  "binary_data_cache_dir": "/data/procgraph",
+  "cache_database_url": "postgresql://blossom@127.0.0.1:54432/blossom",
+  "membership_database_url": "postgresql://blossom@127.0.0.1:54432/blossom",
+  "local_storages": {"st1": "/data/media"},
+  "sandboxing": false,
+  "tempdir": "/data/tmp"
+}

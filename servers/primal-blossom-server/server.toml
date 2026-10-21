@@ -1,0 +1,11 @@
+name = "primal-blossom-server"
+port = 18113
+notes = "PrimalHQ/primal-blossom-server, Rust + axum + Postgres. GET answers 302 to a separate media server (nginx here), so the get rows measure the redirect lookup and not the bytes. Several tables its queries need are missing from its schema.sql and were reconstructed from the SQL. Only text and image content is accepted"
+startup_timeout_s = 240
+data_dirs = ["media", "tmp", "procgraph"]
+get_status = 302
+
+[upload]
+content = "text"
+content_type = "text/plain"
+settle_s = 2

@@ -1,0 +1,12 @@
+listen = "127.0.0.1:${BB_PORT}"
+storage_dir = "/data/store"
+public_url = "http://127.0.0.1:${BB_PORT}"
+ttl_seconds = 86400
+sweep_interval_seconds = 3600
+max_upload_bytes = 2147483648
+max_auth_lifetime_seconds = 3600
+
+[ratelimit]
+uploads_burst = 1000000000
+uploads_refill_per_minute = 1000000000
+bytes_per_hour = 1000000000000000

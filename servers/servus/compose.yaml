@@ -1,0 +1,19 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/servus-social/servus.git"
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev cmake clang && rm -rf /var/lib/apt/lists/*
+        WORKDIR /src
+        COPY . .
+        RUN cargo build --release
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl unzip && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/servus /usr/local/bin/servus
+        RUN mkdir -p /themes && curl -sSL -o /t.zip https://github.com/servus-social/themes/releases/latest/download/themes.zip && unzip -q /t.zip -d /themes && rm /t.zip
+    image: bb-servus:bench
+    command: ["servus", "--sites-dir", "/data/sites", "--themes-dir", "/themes", "--cache-dir", "/data/cache", "--state-dir", "/data/state", "-b", "127.0.0.1", "-p", "${BB_PORT}"]
+    environment:
+      RUST_LOG: "warn"

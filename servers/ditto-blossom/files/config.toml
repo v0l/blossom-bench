@@ -1,0 +1,7 @@
+listen = "127.0.0.1:${BB_PORT}"
+data = "/data/store"
+public_url = "http://127.0.0.1:${BB_PORT}"
+[upload]
+require_auth = true
+max_size = 2147483648
+per_minute = 100000000

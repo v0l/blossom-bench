@@ -1,0 +1,4 @@
+name = "blossom-deno"
+port = 18103
+notes = "hzrd149/blossom-server 6.3.1 on Deno; answers 503 when its upload queue is full"
+startup_timeout_s = 180

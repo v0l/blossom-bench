@@ -1,0 +1,3 @@
+name = "blossom-go"
+port = 18104
+notes = "sebdeveloper6952/blossom-server, Go + gin + SQLite with blobs stored in the database; upload cap raised to 2 GB"

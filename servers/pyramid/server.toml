@@ -1,0 +1,8 @@
+name = "pyramid"
+port = 18112
+notes = "fiatjaf/pyramid, a Nostr relay with khatru's Blossom package, blobs as files and metadata in an MMM event store. Built from its own Dockerfile. Uploads only from members, so the bench key is seeded as a root member"
+ready_path = "/"
+
+[upload]
+auth = "std"
+settle_s = 10

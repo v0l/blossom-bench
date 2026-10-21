@@ -1,0 +1,23 @@
+port: ${BB_PORT}
+host: 127.0.0.1
+publicUrl: http://127.0.0.1:${BB_PORT}
+database:
+  path: /data/sqlite.db
+storage:
+  backend: local
+  local:
+    dir: /data/blobs
+  removeWhenNoOwners: false
+  rules:
+    - type: "*"
+      expiration: 100 years
+upload:
+  enabled: true
+  requireAuth: true
+  maxSize: 2147483648
+list:
+  enabled: false
+mirror:
+  enabled: false
+media:
+  enabled: false

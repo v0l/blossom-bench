@@ -1,0 +1,40 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/PrimalHQ/primal-blossom-server.git"
+      additional_contexts:
+        schema: ./files
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        RUN apt-get update && apt-get install -y --no-install-recommends postgresql clang cmake pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+        WORKDIR /src
+        COPY . .
+        COPY --from=schema schema.sql /schema.sql
+        RUN set -e; \
+            pg_ctlcluster $(ls /etc/postgresql) main start; \
+            su postgres -c "psql -c \"create user build superuser password 'build'\" -c 'create database blossom owner build'"; \
+            PGPASSWORD=build psql -h 127.0.0.1 -U build blossom -f /schema.sql; \
+            DATABASE_URL=postgresql://build:build@127.0.0.1/blossom cargo build --release --bin primal_blossom_server
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 file libimage-exiftool-perl ffmpeg && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/primal_blossom_server /usr/local/bin/primal_blossom_server
+    image: bb-primal-blossom-server:bench
+    command: ["primal_blossom_server", "--config-file", "/data/config.json", "serve"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      media: {condition: service_started}
+  postgres:
+    extends: {file: ../common.yaml, service: aux}
+    image: "postgres:16"
+    command: ["-c", "port=54432", "-c", "listen_addresses=127.0.0.1"]
+    environment:
+      POSTGRES_USER: "blossom"
+      POSTGRES_DB: "blossom"
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    volumes: ["${BB_DATA}/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro"]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 54432 -U blossom -d blossom"], interval: 1s, timeout: 5s, retries: 120}
+  media:
+    extends: {file: ../common.yaml, service: aux}
+    image: "nginx:1-alpine"
+    volumes: ["${BB_DATA}/nginx.conf:/etc/nginx/conf.d/default.conf:ro", "${BB_DATA}/media:/data/media:ro"]

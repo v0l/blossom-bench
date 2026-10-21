@@ -1,0 +1,3 @@
+base_url = "http://bench.local"
+pubkey = "${BB_PUBKEY}"
+theme = "DeepThought"

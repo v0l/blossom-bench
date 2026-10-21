@@ -1,0 +1,27 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/v0l/route96.git"
+      dockerfile_inline: |
+        FROM rust:1-bookworm AS build
+        WORKDIR /src
+        COPY . .
+        RUN cargo build --release --no-default-features --features blossom --bin route96
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+        COPY --from=build /src/target/release/route96 /usr/local/bin/route96
+    image: bb-route96:bench
+    command: ["route96", "--config", "/data/config.yaml"]
+    environment:
+      RUST_LOG: "warn"
+    depends_on:
+      mariadb: {condition: service_healthy}
+  mariadb:
+    extends: {file: ../common.yaml, service: aux}
+    image: "mariadb:latest"
+    command: ["--port=33781", "--bind-address=127.0.0.1"]
+    environment:
+      MARIADB_ROOT_PASSWORD: "root"
+      MARIADB_DATABASE: "route96"
+    healthcheck: {test: ["CMD-SHELL", "mariadb -uroot -proot -e 'select 1'"], interval: 1s, timeout: 5s, retries: 120}

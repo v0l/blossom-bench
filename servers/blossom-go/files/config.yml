@@ -1,0 +1,15 @@
+db_path: "/data/database.sqlite3"
+log_level: "ERROR"
+api_addr: "127.0.0.1:${BB_PORT}"
+cdn_url: "http://127.0.0.1:${BB_PORT}"
+admin_pubkey: "509f37d850fa007227688f2d897e8e8efb6af9a4b2bd636bbd74349f9f2c6d89"
+max_upload_size_bytes: 2147483648
+access_control_rules:
+  - action: "ALLOW"
+    pubkey: "ALL"
+    resource: "UPLOAD"
+  - action: "ALLOW"
+    pubkey: "ALL"
+    resource: "GET"
+allowed_mime_types:
+  - "*"

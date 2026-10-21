@@ -279,6 +279,16 @@ pub async fn fetch(addr: SocketAddr, path: &str) -> Result<(u16, Vec<u8>)> {
     Ok((status, body.to_vec()))
 }
 
+pub async fn fetch_location(addr: SocketAddr, path: &str) -> Result<(u16, Option<String>)> {
+    let mut sender = connect(addr).await?;
+    let req = Request::builder().method(Method::GET).uri(path).header("host", addr.to_string()).body(Full::new(Bytes::new()))?;
+    let resp = sender.send_request(req).await?;
+    let status = resp.status().as_u16();
+    let location = resp.headers().get(hyper::header::LOCATION).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let _ = resp.into_body().collect().await?;
+    Ok((status, location))
+}
+
 pub async fn wait_ready(addr: SocketAddr, path: &str, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {

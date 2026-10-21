@@ -1,0 +1,13 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/fiatjaf/pyramid.git"
+      dockerfile: "Dockerfile"
+    image: bb-pyramid:bench
+    entrypoint: ["/app/pyramid-exe"]
+    environment:
+      HOST: "127.0.0.1"
+      PORT: "${BB_PORT}"
+      DATA_PATH: "/data/pyramid"
+      NO_AUTO_UPDATES: "true"
