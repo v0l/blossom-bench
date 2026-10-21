@@ -5,3 +5,4 @@ notes = "MonumentalSystems/blossom-rs, SQLite metadata, rate limiter and locks o
 [upload]
 auth = "url"
 bound_auth = true
+resign = true

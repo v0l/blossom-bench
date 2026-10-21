@@ -41,6 +41,8 @@ enum Cmd {
         baseline: Option<String>,
         #[arg(long)]
         rebuild: bool,
+        #[arg(long, help = "Run even if the benchmark CPUs are busy with other work")]
+        allow_busy: bool,
         #[arg(long, help = "Put every server's data dir on this path, which must be a filesystem mounted with sync (see scripts/syncfs.sh)")]
         sync_data: Option<PathBuf>,
         #[arg(long)]
@@ -91,7 +93,7 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, sync_data, server_cpus, load_cpus, duration, connections } => {
+        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, allow_busy, sync_data, server_cpus, load_cpus, duration, connections } => {
             let mut suite_def = config::load_suite(&suite)?;
             if let Some(v) = server_cpus {
                 suite_def.run.server_cpus = v;
@@ -131,6 +133,15 @@ async fn main() -> Result<()> {
             }
             std::fs::create_dir_all(&work)?;
             std::fs::create_dir_all(&out)?;
+            let all_cpus: Vec<usize> = server_set.iter().chain(&service_set).chain(&load_set).copied().collect();
+            let busy = sys::cpu_busy_percent(&all_cpus, std::time::Duration::from_secs(3));
+            if busy > 10.0 {
+                let msg = format!("the benchmark CPUs were {busy:.0}% busy with other work before the run started");
+                if !allow_busy {
+                    bail!("{msg}; results would be unreliable. Free the cores or pass --allow-busy");
+                }
+                eprintln!("warning: {msg}");
+            }
             let data_root = match &sync_data {
                 Some(path) => {
                     sys::require_sync_mount(path)?;
@@ -147,6 +158,7 @@ async fn main() -> Result<()> {
                 connections: run.connections,
                 suite: suite.display().to_string(),
                 sync_data: sync_data.is_some(),
+                host_busy_pct: busy,
                 servers: Vec::new(),
             };
 
@@ -209,15 +221,16 @@ async fn main() -> Result<()> {
                 report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error, results });
             }
 
+            let latest = if sync_data.is_some() { "latest-sync" } else { "latest" };
             let stamp = report.when.replace([' ', ':'], "-");
             let json_path = out.join(format!("{stamp}.json"));
             std::fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
             let md = report::markdown(&report, baseline.as_deref());
             std::fs::write(out.join(format!("{stamp}.md")), &md)?;
-            std::fs::write(out.join("latest.md"), &md)?;
+            std::fs::write(out.join(format!("{latest}.md")), &md)?;
             let page = html::page(&report);
             std::fs::write(out.join(format!("{stamp}.html")), &page)?;
-            std::fs::write(out.join("latest.html"), &page)?;
+            std::fs::write(out.join(format!("{latest}.html")), &page)?;
             println!("{md}");
             eprintln!("wrote {}", json_path.display());
             Ok(())

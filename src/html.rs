@@ -415,13 +415,15 @@ pub fn page(rep: &Report) -> String {
     o.push_str("</div></header>");
     let _ = write!(
         o,
-        "<div class=setup><span>run <b>{}</b></span><span>suite <b>{}</b></span><span>servers on CPUs <b>{}</b></span><span>load generator on CPUs <b>{}</b></span><span><b>{}</b> connections</span><span>host <b>{}</b> CPUs</span></div>",
+        "<div class=setup><span>run <b>{}</b></span><span>suite <b>{}</b></span><span>servers on CPUs <b>{}</b></span><span>load generator on CPUs <b>{}</b></span><span><b>{}</b> connections</span><span>host <b>{}</b> CPUs</span>{}{}</div>",
         esc(&rep.when),
         esc(rep.suite.rsplit('/').next().unwrap_or(&rep.suite)),
         esc(&rep.server_cpus),
         esc(&rep.load_cpus),
         rep.connections,
-        rep.host_cpus
+        rep.host_cpus,
+        if rep.sync_data { "<span class=dqt>data dir forced to sync</span>" } else { "" },
+        if rep.host_busy_pct > 5.0 { format!("<span class=flagtxt>benchmark CPUs {:.0}% busy with other work: numbers unreliable</span>", rep.host_busy_pct) } else { String::new() }
     );
     summary(&mut o, rep, &order);
     o.push_str("<div class=legend><span><i></i>result</span><span><i class=h></i>some requests failed, so the rate is not a clean comparison</span><span><i class=q></i>disqualified handler, value shown but not comparable</span></div>");
@@ -532,6 +534,7 @@ mod tests {
             connections: 8,
             suite: "s".into(),
             sync_data: false,
+            host_busy_pct: 0.0,
             servers: vec![run("a", 1000.0), run("b", 2000.0)],
         }
     }

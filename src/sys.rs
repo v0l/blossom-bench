@@ -55,6 +55,35 @@ pub fn require_sync_mount(path: &std::path::Path) -> Result<()> {
     }
 }
 
+fn proc_stat() -> HashMap<usize, (u64, u64)> {
+    let mut out = HashMap::new();
+    let text = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("cpu") else { continue };
+        let mut it = rest.split_whitespace();
+        let Some(id) = it.next().and_then(|i| i.parse::<usize>().ok()) else { continue };
+        let v: Vec<u64> = it.take(8).filter_map(|x| x.parse().ok()).collect();
+        if v.len() >= 5 {
+            out.insert(id, (v.iter().sum(), v[3] + v[4]));
+        }
+    }
+    out
+}
+
+pub fn cpu_busy_percent(cpus: &[usize], window: Duration) -> f64 {
+    let a = proc_stat();
+    std::thread::sleep(window);
+    let b = proc_stat();
+    let (mut total, mut idle) = (0u64, 0u64);
+    for c in cpus {
+        if let (Some(x), Some(y)) = (a.get(c), b.get(c)) {
+            total += y.0.saturating_sub(x.0);
+            idle += y.1.saturating_sub(x.1);
+        }
+    }
+    if total == 0 { 0.0 } else { 100.0 * (total - idle) as f64 / total as f64 }
+}
+
 pub fn online_cpus() -> usize {
     unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize }
 }

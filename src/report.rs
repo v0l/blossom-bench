@@ -22,6 +22,8 @@ pub struct Report {
     pub suite: String,
     #[serde(default)]
     pub sync_data: bool,
+    #[serde(default)]
+    pub host_busy_pct: f64,
     pub servers: Vec<ServerRun>,
 }
 
@@ -117,6 +119,9 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
         rep.host_cpus,
         if rep.sync_data { "forced sync, every write reaches disk" } else { "default, writes may sit in the page cache" }
     );
+    if rep.host_busy_pct > 5.0 {
+        let _ = writeln!(s, "Warning: the benchmark CPUs were {:.0}% busy with other work before the run, so these numbers are unreliable.\n", rep.host_busy_pct);
+    }
     let _ = writeln!(s, "Ratios are against `{}`.\n", rep.servers[base_idx].name);
     let mut names: Vec<String> = Vec::new();
     for sv in &rep.servers {
@@ -263,6 +268,7 @@ mod tests {
             connections: 64,
             suite: "t".into(),
             sync_data: false,
+            host_busy_pct: 0.0,
             servers,
         }
     }

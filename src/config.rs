@@ -63,6 +63,8 @@ pub struct UploadSpec {
     pub content: Option<String>,
     #[serde(default)]
     pub settle_s: u64,
+    #[serde(default)]
+    pub resign: bool,
 }
 
 impl Default for UploadSpec {
@@ -75,6 +77,7 @@ impl Default for UploadSpec {
             content_type: None,
             content: None,
             settle_s: 0,
+            resign: false,
         }
     }
 }

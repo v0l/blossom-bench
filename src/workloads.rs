@@ -199,6 +199,16 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                 if ctx.def.upload.sha_header {
                     h.insert("x-sha-256", HeaderValue::from_str(&hash)?);
                 }
+                let resign: Option<std::sync::Arc<dyn Fn() -> Option<HeaderValue> + Send + Sync>> = if ctx.def.upload.resign {
+                    let (signer, hash, host, auth, bound) =
+                        (ctx.signer.clone(), hash.clone(), host.clone(), ctx.def.upload.auth.clone(), bound.clone());
+                    Some(std::sync::Arc::new(move || {
+                        let t = signer.upload_token(&hash, &host, &auth, bound.as_deref()).ok()?;
+                        HeaderValue::from_str(&t).ok()
+                    }))
+                } else {
+                    None
+                };
                 reqs.push(ReqSpec {
                     method: Method::PUT,
                     uri: ctx.def.upload.path.parse::<Uri>()?,
@@ -208,6 +218,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                     ok_hi: 201,
                     expect_len: None,
                     follow_redirects: false,
+                    resign,
                 });
                 upload_all.push(Blob { hash, size: size as u64 });
             }
@@ -248,6 +259,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                             ok_hi: 404,
                             expect_len: None,
                             follow_redirects: false,
+                    resign: None,
                         })
                         .collect(),
                     _ => blobs
@@ -261,6 +273,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                             ok_hi: 200,
                             expect_len: if kind == Kind::Get { Some(b.size) } else { None },
                             follow_redirects: follow_redirects && kind == Kind::Get,
+                            resign: None,
                         })
                         .collect(),
                 };

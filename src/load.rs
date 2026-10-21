@@ -23,6 +23,7 @@ pub struct ReqSpec {
     pub ok_hi: u16,
     pub expect_len: Option<u64>,
     pub follow_redirects: bool,
+    pub resign: Option<std::sync::Arc<dyn Fn() -> Option<hyper::header::HeaderValue> + Send + Sync>>,
 }
 
 impl ReqSpec {
@@ -31,6 +32,9 @@ impl ReqSpec {
         *req.method_mut() = self.method.clone();
         *req.uri_mut() = self.uri.clone();
         *req.headers_mut() = self.headers.clone();
+        if let Some(token) = self.resign.as_ref().and_then(|f| f()) {
+            req.headers_mut().insert(hyper::header::AUTHORIZATION, token);
+        }
         req
     }
 }
@@ -410,6 +414,7 @@ mod tests {
             ok_hi: hi,
             expect_len: len,
             follow_redirects: false,
+            resign: None,
         }
     }
 

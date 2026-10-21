@@ -6,6 +6,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use secp256k1::{Keypair, SecretKey, schnorr};
 use sha2::{Digest, Sha256};
 
+#[derive(Clone)]
 pub struct Signer {
     keypair: Keypair,
     pub pubkey_hex: String,
