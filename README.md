@@ -33,6 +33,8 @@ Servers are started from an empty data directory for each run, and a failing res
 server and load generator never share a core. If the load generator is more than 85%
 busy on its cores, the report says the number may be its limit.
 
+Rule for inclusion: the server itself must answer `GET /<sha256>` with the blob bytes.
+
 ## Workloads
 
 `suites/*.toml`. `upload` workloads send `count` distinct blobs of `size` bytes, each with
@@ -76,17 +78,18 @@ benchmark key that signs every upload, so a server can allow-list or register it
 route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
 MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
 servus-social/servus, Sakura (Odin), barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
-package), damus-io/afterbloom and PrimalHQ/primal-blossom-server.
+package), and damus-io/afterbloom.
 
 Not included: satellite-cdn, which needs Cloudflare R2, and nostrbuild/nostr.build, whose repo holds
 only the PHP backend behind a Cloudflare Worker proxy (it answers uploads over HMAC-signed
 requests from that Worker and has no public blob GET of its own).
 
-PrimalHQ/primal-blossom-server answers GET with a 302 to a separate media server, which the
-compose project runs as nginx. A redirect is not a served blob, so `follow_redirects = true` makes the
-load generator follow it, and a GET only counts as ok when the final response has the right bytes.
-The latency includes both requests, and nginx's CPU counts towards the server's. Its schema file
-lacks four tables that its queries use, which `files/schema.sql` adds.
+Disqualified: PrimalHQ/primal-blossom-server. It does not serve blobs itself: GET answers 302 to a
+separate media server (nginx in production), so the Blossom server only does the lookup. Every
+included server answers GET with the bytes, so a server that cannot is not compared. Its compose
+project is kept in `disqualified/` and can be run with `--servers disqualified`; the load generator
+follows the redirect (`follow_redirects = true`) and counts a GET only when the final response has
+the right bytes. Its schema file lacks four tables its queries use, which `files/schema.sql` adds.
 
 Needs docker with the compose plugin. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
