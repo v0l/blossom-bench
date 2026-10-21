@@ -21,21 +21,21 @@ const VIEWS: [View; 3] = [
     View {
         key: "rps",
         label: "Requests per second",
-        unit: "successful requests per second, log scale",
+        unit: "successful requests per second, linear scale from zero",
         value: |r| r.ok_per_s,
         show: rate,
     },
     View {
         key: "cpu",
         label: "Per CPU core",
-        unit: "successful requests per CPU-second, database included, log scale",
+        unit: "successful requests per CPU-second, database included, linear scale from zero",
         value: |r| r.ok_per_cpu_s,
         show: rate,
     },
     View {
         key: "p99",
         label: "p99 latency",
-        unit: "99th percentile latency, log scale, shorter is better",
+        unit: "99th percentile latency, linear scale from zero, shorter is better",
         value: |r| r.p99_us as f64,
         show: |us| lat(us as u64),
     },
@@ -94,26 +94,28 @@ fn problems(r: &WorkloadResult) -> Vec<String> {
     p
 }
 
-fn log_axis(values: &[f64]) -> (f64, f64) {
-    let positive: Vec<f64> = values.iter().copied().filter(|v| *v > 0.0).collect();
-    let min = positive.iter().copied().fold(f64::MAX, f64::min);
-    let max = positive.iter().copied().fold(0.0, f64::max);
-    if positive.is_empty() {
-        return (1.0, 10.0);
+fn linear_axis(values: &[f64]) -> (f64, Vec<f64>) {
+    let max = values.iter().copied().fold(0.0, f64::max);
+    if max <= 0.0 {
+        return (1.0, vec![0.0, 1.0]);
     }
-    let lo = 10f64.powf((min * 0.7).log10().floor());
-    let mut hi = 10f64.powf(max.log10().ceil());
-    if hi <= lo * 1.5 {
-        hi = lo * 10.0;
-    }
-    (lo, hi)
+    let rough = max / 4.0;
+    let exp = 10f64.powf(rough.log10().floor());
+    let step = [1.0, 2.0, 2.5, 5.0, 10.0]
+        .iter()
+        .map(|m| m * exp)
+        .find(|st| *st >= rough)
+        .unwrap_or(10.0 * exp);
+    let top = (max / step).ceil() * step;
+    let ticks = (0..=((top / step).round() as usize)).map(|i| i as f64 * step).collect();
+    (top, ticks)
 }
 
-fn log_frac(v: f64, lo: f64, hi: f64) -> f64 {
-    if v <= 0.0 {
+fn frac(v: f64, top: f64) -> f64 {
+    if v <= 0.0 || top <= 0.0 {
         return 0.0;
     }
-    ((v.log10() - lo.log10()) / (hi.log10() - lo.log10())).clamp(0.0, 1.0)
+    (v / top).clamp(0.0, 1.0)
 }
 
 fn tick_label(view: &View, v: f64) -> String {
@@ -156,17 +158,10 @@ fn geomean_order(rep: &Report) -> Vec<usize> {
 fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &View) {
     let rows: Vec<(usize, Option<&WorkloadResult>)> = order.iter().map(|&i| (i, find(&rep.servers[i], workload))).collect();
     let values: Vec<f64> = rows.iter().filter_map(|(_, r)| r.map(view.value)).collect();
-    let (lo, hi) = log_axis(&values);
-
-    let mut ticks = Vec::new();
-    let mut t = lo;
-    while t <= hi * 1.0001 {
-        ticks.push(t);
-        t *= 10.0;
-    }
+    let (top, ticks) = linear_axis(&values);
     let grid: String = ticks
         .iter()
-        .map(|t| format!("<u style=\"left:{:.2}%\"></u>", log_frac(*t, lo, hi) * 100.0))
+        .map(|t| format!("<u style=\"left:{:.2}%\"></u>", frac(*t, top) * 100.0))
         .collect();
 
     let _ = write!(o, "<section class=panel><h3>{}</h3>", esc(workload));
@@ -191,7 +186,7 @@ fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &V
         if !probs.is_empty() {
             failures.push(format!("{}: {}", rep.servers[*i].name, probs.join(", ")));
         }
-        let width = if v > 0.0 { (log_frac(v, lo, hi) * 100.0).max(1.5) } else { 0.0 };
+        let width = if v > 0.0 { (frac(v, top) * 100.0).max(0.4) } else { 0.0 };
         let mut class = String::from("bar");
         if r.disqualified {
             class.push_str(" dq");
@@ -213,7 +208,7 @@ fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &V
         "<div class=\"row axis\"><span></span><span class=track>{}</span><span></span></div>",
         ticks
             .iter()
-            .map(|t| format!("<em style=\"left:{:.2}%\">{}</em>", log_frac(*t, lo, hi) * 100.0, esc(&tick_label(view, *t))))
+            .map(|t| format!("<em style=\"left:{:.2}%\">{}</em>", frac(*t, top) * 100.0, esc(&tick_label(view, *t))))
             .collect::<String>()
     );
     if !failures.is_empty() {
@@ -587,11 +582,24 @@ mod tests {
     }
 
     #[test]
-    fn log_axis_spans_the_data_in_whole_decades() {
-        let (lo, hi) = log_axis(&[1970.0, 5210.0, 50.0]);
-        assert_eq!((lo, hi), (10.0, 10000.0));
-        assert!(log_frac(50.0, lo, hi) > 0.0 && log_frac(5210.0, lo, hi) < 1.0);
-        assert_eq!(log_frac(0.0, lo, hi), 0.0);
+    fn linear_axis_starts_at_zero_and_bar_length_is_proportional() {
+        let (top, ticks) = linear_axis(&[1970.0, 5210.0, 50.0]);
+        assert_eq!(ticks.first(), Some(&0.0));
+        assert!(top >= 5210.0 && top <= 6000.0);
+        assert!((frac(2605.0, top) * 2.0 - frac(5210.0, top)).abs() < 1e-9);
+        assert!(frac(50.0, top) < 0.01);
+        assert_eq!(frac(0.0, top), 0.0);
+    }
+
+    #[test]
+    fn a_slow_server_gets_a_proportionally_tiny_bar() {
+        let mut rep = report();
+        rep.servers[0].results[0].ok_per_s = 100.0;
+        rep.servers[1].results[0].ok_per_s = 100_000.0;
+        let html = page(&rep);
+        assert!(html.contains("width:0.40%"));
+        assert!(html.contains("linear scale from zero"));
+        assert!(!html.contains("log scale"));
     }
 
     #[test]
