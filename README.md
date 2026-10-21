@@ -59,7 +59,7 @@ Make `servers/<name>/` with:
   (`build.context`) with either its own Dockerfile or `dockerfile_inline`, or use a
   published `image`.
 - `server.toml`: `name`, `port`, `ready_path`, `notes`, `startup_timeout_s`, `data_dirs`
-  (created empty under the data dir), `get_status` , `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
+  (created empty under the data dir), `follow_redirects` (for a server whose GET redirects to the bytes), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
   server answers, for seeding) and `[upload]`: `path`, `auth = "std" | "url"` base64
   alphabet, `bound_auth` (sign `server`, `u` and `method` tags), `sha_header`,
   `content_type`, `content` (`random`, `text`, `png`), `settle_s`.
