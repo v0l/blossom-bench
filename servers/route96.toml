@@ -3,7 +3,7 @@ port = 18101
 notes = "built with --features blossom; MariaDB on its own cores"
 
 [source]
-path = "~/git/route96"
+git = "https://github.com/v0l/route96.git"
 
 [image]
 dockerfile_inline = """

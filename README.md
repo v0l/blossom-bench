@@ -64,15 +64,20 @@ Drop a file in `servers/`. Fields:
   `method` tags), `sha_header`, `content_type`, `content` (`random`, `text`, `png`), `settle_s`
 - `url = "http://host:port"` instead of a source benchmarks a server that is already running
 
-`{port}`, `{data}`, `{src}` and `{pubkey}` are expanded in args, env, files and hooks. `{pubkey}` is the
-fixed benchmark key that signs every upload, so a server can allow-list or register it.
+`{port}`, `{data}`, `{src}`, `{pubkey}` and `{npub}` are expanded in args, env, files and hooks. `{pubkey}` is the
+fixed benchmark key that signs every upload, so a server can allow-list or register it. `{npub}` is
+the same key in bech32.
 
 ## Included servers
 
 route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
-MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server and
-servus-social/servus. Not included: khatru, which is a relay library with no storage backend of
-its own, and satellite-cdn, which needs Cloudflare R2.
+MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
+servus-social/servus, Sakura (Odin), barrydeen/haven (which also covers khatru's Blossom package)
+and damus-io/afterbloom.
+
+Not included: satellite-cdn, which needs Cloudflare R2. PrimalHQ/primal-blossom-server needs
+Postgres tables that its schema file does not define and answers GET with a redirect to a separate
+media server. nostrbuild/nostr.build needs PHP, MariaDB and S3-compatible storage.
 
 Needs docker. Images are cached between runs; `--rebuild` rebuilds them without cache.
 
