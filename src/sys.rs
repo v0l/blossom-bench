@@ -34,6 +34,27 @@ pub fn set_affinity(cpus: &[usize]) -> std::io::Result<()> {
     Ok(())
 }
 
+pub fn require_sync_mount(path: &std::path::Path) -> Result<()> {
+    let real = std::fs::canonicalize(path)?;
+    let info = std::fs::read_to_string("/proc/self/mountinfo")?;
+    let best = info
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(' ').collect();
+            let mount = f.get(4)?;
+            let opts = f.get(5)?;
+            let after = f.iter().position(|x| *x == "-")?;
+            let super_opts = f.get(after + 3)?;
+            real.starts_with(mount).then(|| (mount.len(), format!("{opts},{super_opts}")))
+        })
+        .max_by_key(|(len, _)| *len);
+    match best {
+        Some((_, opts)) if opts.split(',').any(|o| o == "sync" || o == "dirsync") => Ok(()),
+        Some((_, opts)) => bail!("{} is not on a filesystem mounted with sync ({opts}); run scripts/syncfs.sh up", real.display()),
+        None => bail!("cannot find the mount of {}", real.display()),
+    }
+}
+
 pub fn online_cpus() -> usize {
     unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize }
 }
@@ -166,6 +187,12 @@ impl Sampler {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plain_tmp_is_not_a_sync_mount() {
+        let dir = std::env::temp_dir();
+        assert!(super::require_sync_mount(&dir).is_err());
+    }
+
     use super::*;
 
     #[test]

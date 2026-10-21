@@ -41,6 +41,8 @@ enum Cmd {
         baseline: Option<String>,
         #[arg(long)]
         rebuild: bool,
+        #[arg(long, help = "Put every server's data dir on this path, which must be a filesystem mounted with sync (see scripts/syncfs.sh)")]
+        sync_data: Option<PathBuf>,
         #[arg(long)]
         server_cpus: Option<String>,
         #[arg(long)]
@@ -89,7 +91,7 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, server_cpus, load_cpus, duration, connections } => {
+        Cmd::Run { suite, servers, only, out, work, baseline, rebuild, sync_data, server_cpus, load_cpus, duration, connections } => {
             let mut suite_def = config::load_suite(&suite)?;
             if let Some(v) = server_cpus {
                 suite_def.run.server_cpus = v;
@@ -129,6 +131,13 @@ async fn main() -> Result<()> {
             }
             std::fs::create_dir_all(&work)?;
             std::fs::create_dir_all(&out)?;
+            let data_root = match &sync_data {
+                Some(path) => {
+                    sys::require_sync_mount(path)?;
+                    path.clone()
+                }
+                None => work.join("data"),
+            };
 
             let mut report = Report {
                 when: now(),
@@ -137,6 +146,7 @@ async fn main() -> Result<()> {
                 load_cpus: run.load_cpus.clone(),
                 connections: run.connections,
                 suite: suite.display().to_string(),
+                sync_data: sync_data.is_some(),
                 servers: Vec::new(),
             };
 
@@ -144,7 +154,7 @@ async fn main() -> Result<()> {
                 eprintln!("== {}", def.name);
                 let port = if def.port != 0 { def.port } else { 18100 + i as u16 };
                 let signer = nostr::Signer::fixed()?;
-                let vars = Vars { port, data: work.join("data").join(&def.name), pubkey: signer.pubkey_hex.clone() };
+                let vars = Vars { port, data: data_root.join(&def.name), pubkey: signer.pubkey_hex.clone() };
                 let limits = runner::Limits { server_cpus: &server_set, service_cpus: &service_set, memory: &run.server_memory };
                 if let Err(e) = runner::build(def, &work, &vars, &limits, rebuild) {
                     eprintln!("  build failed: {e:#}");

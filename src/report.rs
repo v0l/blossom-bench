@@ -20,6 +20,8 @@ pub struct Report {
     pub load_cpus: String,
     pub connections: usize,
     pub suite: String,
+    #[serde(default)]
+    pub sync_data: bool,
     pub servers: Vec<ServerRun>,
 }
 
@@ -106,8 +108,14 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
     let _ = writeln!(s, "# Blossom benchmark\n");
     let _ = writeln!(
         s,
-        "{}. Suite `{}`. Servers on CPUs {}, load generator on CPUs {}, {} connections, host has {} CPUs.\n",
-        rep.when, rep.suite, rep.server_cpus, rep.load_cpus, rep.connections, rep.host_cpus
+        "{}. Suite `{}`. Servers on CPUs {}, load generator on CPUs {}, {} connections, host has {} CPUs. Data dir: {}.\n",
+        rep.when,
+        rep.suite,
+        rep.server_cpus,
+        rep.load_cpus,
+        rep.connections,
+        rep.host_cpus,
+        if rep.sync_data { "forced sync, every write reaches disk" } else { "default, writes may sit in the page cache" }
     );
     let _ = writeln!(s, "Ratios are against `{}`.\n", rep.servers[base_idx].name);
     let mut names: Vec<String> = Vec::new();
@@ -254,6 +262,7 @@ mod tests {
             load_cpus: "4-7".into(),
             connections: 64,
             suite: "t".into(),
+            sync_data: false,
             servers,
         }
     }

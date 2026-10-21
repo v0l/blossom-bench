@@ -531,6 +531,7 @@ mod tests {
             load_cpus: "4-7".into(),
             connections: 8,
             suite: "s".into(),
+            sync_data: false,
             servers: vec![run("a", 1000.0), run("b", 2000.0)],
         }
     }
