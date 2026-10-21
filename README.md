@@ -35,8 +35,9 @@ busy on its cores, the report says the number may be its limit.
 
 Rule for inclusion: the server itself must do the work of each handler. A handler that hands the
 work to another codebase is marked in `server.toml` under `[[offloaded]]` with a `kind` (`upload`,
-`get`, `head`, `miss`) and a `reason`. With `disqualify = true` the workloads of that kind are not
-run and the report shows DQ for them, and the server is listed after the others. Without it the
+`get`, `head`, `miss`) and a `reason`. With `disqualify = true` the workloads of that kind still run and keep their recorded values, but the
+report draws them in purple with a DQ tag, notes the reason, leaves them out of the scale the summary
+bars use, and lists the server after the others. Without it the
 workload runs and is scored, and the report names what it offloads (amber text under the chart,
 and in the summary's problems column). `GET` must return the bytes: a redirect to another server
 is a disqualification.

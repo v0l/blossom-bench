@@ -8,7 +8,7 @@ follow_redirects = true
 [[offloaded]]
 kind = "get"
 disqualify = true
-reason = "does not serve the file: GET answers 302 to a separate media server"
+reason = "does not serve the file: GET answers 302 to a separate media server, so the figure includes following the redirect to nginx (and nginx's CPU)"
 
 [[offloaded]]
 kind = "upload"

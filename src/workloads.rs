@@ -140,10 +140,6 @@ fn skipped(w: &Workload, why: &str) -> WorkloadResult {
     }
 }
 
-fn disqualified(w: &Workload, why: &str) -> WorkloadResult {
-    WorkloadResult { disqualified: true, ..skipped(w, why) }
-}
-
 async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) {
     let mut bad = 0;
     let n = ctx.run.verify.min(blobs.len());
@@ -162,9 +158,6 @@ async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) 
 
 pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<WorkloadResult> {
     let offload = ctx.def.offload(w.kind).cloned();
-    if let Some(o) = offload.as_ref().filter(|o| o.disqualify) {
-        return Ok(disqualified(w, &o.reason));
-    }
     let mut rng = Rng(seed ^ 0x9E3779B97F4A7C15 | 1);
     let conns = w.connections.unwrap_or(ctx.run.connections);
     let host = ctx.addr.ip().to_string();
@@ -336,7 +329,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         verified: verified.0,
         verify_bad: verified.1,
         skipped: None,
-        disqualified: false,
+        disqualified: offload.as_ref().is_some_and(|o| o.disqualify),
         offloaded: offload.map(|o| o.reason),
         error_sample: out.error_sample,
     })

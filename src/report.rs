@@ -69,9 +69,6 @@ fn failure_rate(r: &WorkloadResult) -> f64 {
 
 fn cell_rate(r: Option<&WorkloadResult>, base: Option<&WorkloadResult>) -> String {
     let Some(r) = r else { return "n/a".into() };
-    if r.disqualified {
-        return "DQ".into();
-    }
     if let Some(s) = &r.skipped {
         return format!("skipped ({s})");
     }
@@ -94,6 +91,9 @@ fn cell_rate(r: Option<&WorkloadResult>, base: Option<&WorkloadResult>) -> Strin
         if b.skipped.is_none() && b.ok_per_s > 0.0 && !std::ptr::eq(r, b) {
             out.push_str(&format!(" {}", ratio(r.ok_per_s / b.ok_per_s)));
         }
+    }
+    if r.disqualified {
+        out.push_str(", DQ");
     }
     out
 }
@@ -200,7 +200,8 @@ pub fn markdown(rep: &Report, baseline: Option<&str>) -> String {
                 notes.push(format!("- `{}` / {}: first failure was {}", sv.name, r.name, e));
             }
             if let Some(why) = &r.offloaded {
-                notes.push(format!("- `{}` / {}: offloads work, {}", sv.name, r.name, why));
+                let tag = if r.disqualified { "disqualified" } else { "offloads work" };
+                notes.push(format!("- `{}` / {}: {}, {}", sv.name, r.name, tag, why));
             }
             if r.skipped.is_none() && r.load_gen_util > 0.85 {
                 notes.push(format!(
