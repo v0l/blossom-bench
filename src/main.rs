@@ -219,6 +219,9 @@ async fn main() -> Result<()> {
                     }
                 }
                 running.stop().await;
+                if ram_data.is_some() {
+                    let _ = std::fs::remove_dir_all(&vars.data);
+                }
                 report.servers.push(ServerRun { name: def.name.clone(), notes: def.notes.clone(), error, results });
             }
 
