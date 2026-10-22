@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use ramhorns::{Content, Ramhorns};
 
 use crate::report::{Report, ServerRun};
 use crate::workloads::WorkloadResult;
@@ -40,10 +40,6 @@ const VIEWS: [View; 3] = [
         show: |us| lat(us as u64),
     },
 ];
-
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
 
 fn rate(v: f64) -> String {
     if v >= 100_000.0 {
@@ -155,72 +151,176 @@ fn geomean_order(rep: &Report) -> Vec<usize> {
     idx
 }
 
-fn panel(o: &mut String, rep: &Report, order: &[usize], workload: &str, view: &View) {
+#[derive(Content)]
+struct PageView {
+    style: &'static str,
+    script: &'static str,
+    server_count: usize,
+    views: Vec<ViewLink>,
+    when: String,
+    suite: String,
+    server_cpus: String,
+    load_cpus: String,
+    connections: usize,
+    host_cpus: usize,
+    ram_data: bool,
+    busy_warning: String,
+    groups: Vec<GroupTitle>,
+    summary: Vec<SummaryRow>,
+    chart_views: Vec<ChartView>,
+    memory: Vec<MemoryRow>,
+    notes: Vec<NoteBlock>,
+}
+
+#[derive(Content)]
+struct GroupTitle {
+    title: &'static str,
+}
+
+#[derive(Content)]
+struct NoteLine {
+    text: String,
+    code: String,
+    tail: String,
+}
+
+#[derive(Content)]
+struct ViewLink {
+    key: &'static str,
+    label: &'static str,
+}
+
+#[derive(Content)]
+struct SummaryRow {
+    rank: usize,
+    name: String,
+    cells: Vec<SummaryCell>,
+    p99: String,
+    peak_memory: String,
+    error: String,
+    problems: bool,
+    dq_list: String,
+    bad_list: String,
+    off_list: String,
+}
+
+#[derive(Content)]
+struct SummaryCell {
+    value: String,
+    width: String,
+    dq: bool,
+}
+
+#[derive(Content)]
+struct ChartView {
+    key: &'static str,
+    unit: &'static str,
+    groups: Vec<ChartGroup>,
+}
+
+#[derive(Content)]
+struct ChartGroup {
+    title: &'static str,
+    panels: Vec<PanelView>,
+}
+
+#[derive(Content)]
+struct PanelView {
+    workload: String,
+    rows: Vec<BarRow>,
+    ticks: Vec<Tick>,
+    failures: String,
+    dq_note: String,
+    offload_note: String,
+}
+
+#[derive(Content)]
+struct BarRow {
+    name: String,
+    present: bool,
+    dq: bool,
+    hatch: bool,
+    flag: bool,
+    capped: bool,
+    width: String,
+    value: String,
+    grid: Vec<Tick>,
+}
+
+#[derive(Content, Clone)]
+struct Tick {
+    left: String,
+    label: String,
+}
+
+#[derive(Content)]
+struct MemoryRow {
+    name: String,
+    anon_width: String,
+    file_width: String,
+    anon: String,
+    file: String,
+}
+
+#[derive(Content)]
+struct NoteBlock {
+    name: String,
+    lines: Vec<NoteLine>,
+}
+
+fn pct(v: f64) -> String {
+    format!("{v:.2}")
+}
+
+fn panel(rep: &Report, order: &[usize], workload: &str, view: &View) -> PanelView {
     let rows: Vec<(usize, Option<&WorkloadResult>)> = order.iter().map(|&i| (i, find(&rep.servers[i], workload))).collect();
     let values: Vec<f64> = rows.iter().filter_map(|(_, r)| r.map(view.value)).collect();
-    let (top, ticks) = linear_axis(&values);
-    let grid: String = ticks
-        .iter()
-        .map(|t| format!("<u style=\"left:{:.2}%\"></u>", frac(*t, top) * 100.0))
-        .collect();
+    let (top, tick_values) = linear_axis(&values);
+    let grid: Vec<Tick> = tick_values.iter().map(|t| Tick { left: pct(frac(*t, top) * 100.0), label: String::new() }).collect();
 
-    let _ = write!(o, "<section class=panel><h3>{}</h3>", esc(workload));
     let mut failures: Vec<String> = Vec::new();
     let mut offloads: Vec<String> = Vec::new();
     let mut dqs: Vec<String> = Vec::new();
+    let mut bars = Vec::new();
     for (i, r) in &rows {
-        let name = esc(&rep.servers[*i].name);
+        let name = rep.servers[*i].name.clone();
         let Some(r) = r else {
-            let _ = write!(o, "<div class=row><span class=name>{name}</span><span class=track></span><span class=val>n/a</span></div>");
+            bars.push(BarRow { name, present: false, dq: false, hatch: false, flag: false, capped: false, width: String::new(), value: String::new(), grid: vec![] });
             continue;
         };
         if let Some(why) = &r.offloaded {
             if r.disqualified {
-                dqs.push(format!("{}: disqualified, {}", rep.servers[*i].name, why));
+                dqs.push(format!("{name}: disqualified, {why}"));
             } else {
-                offloads.push(format!("{}: offloaded, {}", rep.servers[*i].name, why));
+                offloads.push(format!("{name}: offloaded, {why}"));
             }
         }
         let v = (view.value)(r);
         let probs = problems(r);
         if !probs.is_empty() {
-            failures.push(format!("{}: {}", rep.servers[*i].name, probs.join(", ")));
+            failures.push(format!("{name}: {}", probs.join(", ")));
         }
         let width = if v > 0.0 { (frac(v, top) * 100.0).max(0.4) } else { 0.0 };
-        let mut class = String::from("bar");
-        if r.disqualified {
-            class.push_str(" dq");
-        }
-        if !probs.is_empty() {
-            class.push_str(" hatch");
-        }
-        let _ = write!(
-            o,
-            "<div class=\"row{}\"><span class=name>{name}</span><span class=track>{grid}<i class=\"{class}\" style=\"width:{width:.2}%\"></i></span><span class=val>{}{}{}</span></div>",
-            if r.disqualified { " dq" } else { "" },
-            (view.show)(v),
-            if probs.is_empty() { "" } else { "<b class=flag>!</b>" },
-            if r.disqualified { "<b class=dqtag>DQ</b>" } else { "" },
-        );
+        bars.push(BarRow {
+            name,
+            present: true,
+            dq: r.disqualified,
+            hatch: !probs.is_empty(),
+            flag: !probs.is_empty(),
+            capped: r.capped,
+            width: pct(width),
+            value: (view.show)(v),
+            grid: grid.clone(),
+        });
     }
-    let _ = write!(
-        o,
-        "<div class=\"row axis\"><span></span><span class=track>{}</span><span></span></div>",
-        ticks
-            .iter()
-            .map(|t| format!("<em style=\"left:{:.2}%\">{}</em>", frac(*t, top) * 100.0, esc(&tick_label(view, *t))))
-            .collect::<String>()
-    );
-    if !failures.is_empty() {
-        let _ = write!(o, "<p class=fails>{}</p>", esc(&failures.join(". ")));
+    PanelView {
+        workload: workload.to_string(),
+        rows: bars,
+        ticks: tick_values.iter().map(|t| Tick { left: pct(frac(*t, top) * 100.0), label: tick_label(view, *t) }).collect(),
+        failures: failures.join(". "),
+        dq_note: dqs.join(". "),
+        offload_note: offloads.join(". "),
     }
-    if !dqs.is_empty() {
-        let _ = write!(o, "<p class=dqnote>{}</p>", esc(&dqs.join(". ")));
-    }
-    if !offloads.is_empty() {
-        let _ = write!(o, "<p class=offl>{}</p>", esc(&offloads.join(". ")));
-    }
-    o.push_str("</section>");
 }
 
 fn group_mean(s: &ServerRun, workloads: &[&str]) -> Option<f64> {
@@ -239,207 +339,53 @@ fn peak_mem(s: &ServerRun) -> f64 {
     s.results.iter().filter(|r| r.skipped.is_none()).map(|r| r.peak_anon_mb + r.peak_file_mb).fold(0.0, f64::max)
 }
 
-fn summary(o: &mut String, rep: &Report, order: &[usize]) {
-    o.push_str("<h2 class=first>Summary</h2><p class=unit style=\"margin:0 0 10px\">Geometric mean of successful requests per second across each group of workloads. Servers are ranked by the mean over all of them. A server with a disqualified handler (DQ, shown in purple) is listed after the others.</p><div class=sum><table><tr><th></th><th>server</th>");
-    for (title, _) in GROUPS {
-        let _ = write!(o, "<th>{title}</th>");
-    }
-    o.push_str("<th>p99 get-1k</th><th>peak memory</th><th>problems</th></tr>");
+fn summary_rows(rep: &Report, order: &[usize]) -> Vec<SummaryRow> {
     let all: Vec<&str> = GROUPS.iter().flat_map(|(_, w)| w.iter().copied()).collect();
     let best: Vec<f64> = GROUPS
         .iter()
         .map(|(_, w)| rep.servers.iter().filter(|s| !group_has_dq(s, w)).filter_map(|s| group_mean(s, w)).fold(0.0, f64::max))
         .collect();
-    for (rank, &i) in order.iter().enumerate() {
-        let sv = &rep.servers[i];
-        let _ = write!(o, "<tr><td class=rank>{}</td><td class=srv>{}</td>", rank + 1, esc(&sv.name));
-        for (g, (_, w)) in GROUPS.iter().enumerate() {
-            match group_mean(sv, w) {
-                Some(v) => {
-                    let dq = group_has_dq(sv, w);
-                    let _ = write!(
-                        o,
-                        "<td><span class=\"cell{}\"><i style=\"width:{:.1}%\"></i><b>{}</b>{}</span></td>",
-                        if dq { " dq" } else { "" },
-                        (v / best[g].max(1e-9) * 100.0).clamp(0.0, 100.0),
-                        rate(v),
-                        if dq { "<u>DQ</u>" } else { "" }
-                    );
-                }
-                None => o.push_str("<td class=na>n/a</td>"),
+    order
+        .iter()
+        .enumerate()
+        .map(|(rank, &i)| {
+            let sv = &rep.servers[i];
+            let cells = GROUPS
+                .iter()
+                .enumerate()
+                .map(|(g, (_, w))| match group_mean(sv, w) {
+                    Some(v) => SummaryCell {
+                        value: rate(v),
+                        width: format!("{:.1}", (v / best[g].max(1e-9) * 100.0).clamp(0.0, 100.0)),
+                        dq: group_has_dq(sv, w),
+                    },
+                    None => SummaryCell { value: String::new(), width: String::new(), dq: false },
+                })
+                .collect();
+            let dq: Vec<&str> = all.iter().filter(|w| find(sv, w).is_some_and(|r| r.disqualified)).copied().collect();
+            let off: Vec<&str> = all
+                .iter()
+                .filter(|w| sv.results.iter().any(|r| r.name == **w && r.offloaded.is_some() && !r.disqualified))
+                .copied()
+                .collect();
+            let bad: Vec<&str> = all.iter().filter(|w| find(sv, w).is_some_and(|r| !problems(r).is_empty())).copied().collect();
+            SummaryRow {
+                rank: rank + 1,
+                name: sv.name.clone(),
+                cells,
+                p99: find(sv, "get-1k").map(|r| lat(r.p99_us)).unwrap_or_else(|| "n/a".into()),
+                peak_memory: format!("{:.0}", peak_mem(sv)),
+                error: sv.error.as_ref().map(|e| e.lines().next().unwrap_or("").to_string()).unwrap_or_default(),
+                problems: !(bad.is_empty() && dq.is_empty() && off.is_empty()),
+                dq_list: dq.join(", "),
+                bad_list: bad.join(", "),
+                off_list: off.join(", "),
             }
-        }
-        let _ = write!(o, "<td class=num>{}</td>", find(sv, "get-1k").map(|r| lat(r.p99_us)).unwrap_or_else(|| "n/a".into()));
-        let _ = write!(o, "<td class=num>{:.0} MB</td>", peak_mem(sv));
-        let dq: Vec<&str> = all.iter().filter(|w| find(sv, w).is_some_and(|r| r.disqualified)).copied().collect();
-        let off: Vec<&str> = all
-            .iter()
-            .filter(|w| sv.results.iter().any(|r| r.name == **w && r.offloaded.is_some() && !r.disqualified))
-            .copied()
-            .collect();
-        let bad: Vec<&str> = all
-            .iter()
-            .filter(|w| find(sv, w).is_some_and(|r| !problems(r).is_empty()))
-            .copied()
-            .collect();
-        if let Some(e) = &sv.error {
-            let _ = write!(o, "<td class=flagtxt>did not run: {}</td>", esc(e.lines().next().unwrap_or("")));
-        } else if bad.is_empty() && dq.is_empty() && off.is_empty() {
-            o.push_str("<td class=na>none</td>");
-        } else {
-            o.push_str("<td class=flagtxt>");
-            if !dq.is_empty() {
-                let _ = write!(o, "<span class=dqt>DQ {}</span>. ", esc(&dq.join(", ")));
-            }
-            if !bad.is_empty() {
-                let _ = write!(o, "failures: {}. ", esc(&bad.join(", ")));
-            }
-            if !off.is_empty() {
-                let _ = write!(o, "<span class=offl>offloads: {}</span>", esc(&off.join(", ")));
-            }
-            o.push_str("</td>");
-        }
-        o.push_str("</tr>");
-    }
-    o.push_str("</table></div>");
+        })
+        .collect()
 }
 
-const STYLE: &str = r#"
-:root{--paper:#fbfbfa;--ink:#16212c;--dim:#6a7784;--rule:#e1e5e9;--bar:#7d93aa;--accent:#2f5d8a;--bad:#c23b2e;
---sans:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
-*{box-sizing:border-box}
-html{background:var(--paper)}
-body{margin:0;color:var(--ink);font:14px/1.5 var(--sans)}
-main{max-width:1320px;margin:0 auto;padding:56px 32px 96px}
-header{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px 48px;align-items:end;margin-bottom:12px}
-h1{margin:0;font-size:44px;line-height:1;font-weight:700;letter-spacing:-.035em}
-.lede{margin:14px 0 0;max-width:62ch;color:var(--dim);font-size:15px}
-.switch{display:inline-flex;border:1px solid var(--ink);border-radius:999px;padding:3px}
-.switch button{border:0;background:none;color:var(--ink);font:inherit;font-weight:500;padding:6px 16px;border-radius:999px;cursor:pointer}
-.switch button[aria-pressed=true]{background:var(--ink);color:var(--paper)}
-.switch button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.setup{margin:28px 0 0;padding:12px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);display:flex;flex-wrap:wrap;gap:6px 36px;color:var(--dim);font-size:13px}
-.setup span b{color:var(--ink);font-weight:600;font-family:var(--mono);font-size:12.5px}
-.unit{margin:14px 0 0;color:var(--dim);font-size:13px}
-h2.first{margin-top:36px}
-h2{margin:44px 0 14px;font-size:22px;letter-spacing:-.02em}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:36px 40px}
-.panel{min-width:0}
-h3{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--ink);font:600 15px/1.2 var(--mono)}
-.row{display:grid;grid-template-columns:110px minmax(0,1fr) 64px;gap:0 8px;align-items:center;height:25px}
-.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:12.5px}
-.track{position:relative;height:100%}
-.track u{position:absolute;top:0;bottom:0;width:1px;background:var(--rule)}
-.bar{position:absolute;left:0;top:6px;height:13px;background:var(--bar);border-radius:0 2px 2px 0}
-.bar.hatch{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.75) 0 2px,transparent 2px 5px)}
-.val{text-align:right;font:12.5px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-.flag{color:var(--bad);margin-left:3px}
-.axis{height:18px}
-.axis .track{height:18px}
-.axis em{position:absolute;top:2px;transform:translateX(-50%);font:11px var(--mono);font-style:normal;color:var(--dim);white-space:nowrap}
-.fails{margin:6px 0 0;color:var(--bad);font-size:12px;line-height:1.35}
-.offl{margin:6px 0 0;color:#8a5a00;font-size:12px;line-height:1.35}
-.dqnote{margin:6px 0 0;color:#7a3fa0;font-size:12px;line-height:1.35}
-.bar.dq{background-color:#a66bc9}
-.row.dq .val{color:#7a3fa0}
-.dqtag{margin-left:5px;color:#7a3fa0;font:700 10px var(--mono)}
-.sum td.flagtxt .dqt{color:#7a3fa0;font-weight:600}
-.cell.dq i{background:#e6d4f0}
-.cell.dq b{color:#7a3fa0}
-.cell u{text-decoration:none;color:#7a3fa0;font:700 10px var(--mono);margin-left:4px;position:relative}
-.sum table{border-collapse:collapse;width:100%}
-.sum th{font-weight:500;color:var(--dim);text-align:right;padding:6px 14px 6px 0;border-bottom:1px solid var(--ink);font-size:12.5px}
-.sum td{padding:7px 14px 7px 0;border-bottom:1px solid var(--rule);text-align:right;vertical-align:middle}
-.sum th:nth-child(2),.sum td.srv{text-align:left}
-.sum td.rank{width:28px;color:var(--dim);font:12px var(--mono);text-align:left}
-.sum td.srv{font-weight:600}
-.sum td.num{font:12.5px var(--mono)}
-.sum td.na{color:var(--dim)}
-.sum td.flagtxt .offl{margin:0}
-.sum td.flagtxt{color:var(--bad);font-size:12px;text-align:left;max-width:260px;white-space:normal}
-.sum th:last-child{text-align:left}
-.sum td:last-child{text-align:left}
-.cell{position:relative;display:inline-block;min-width:110px;height:22px;text-align:right}
-.cell i{position:absolute;left:0;top:3px;bottom:3px;background:#dbe3eb;border-radius:0 2px 2px 0}
-.cell b{position:relative;font:600 12.5px/22px var(--mono);padding-right:4px}
-.view{display:none}
-body[data-view=rps] .v-rps,body[data-view=cpu] .v-cpu,body[data-view=p99] .v-p99{display:block}
-body[data-view=rps] .grid.v-rps,body[data-view=cpu] .grid.v-cpu,body[data-view=p99] .grid.v-p99{display:grid}
-.mem{max-width:720px}
-.mem .row{grid-template-columns:130px minmax(0,1fr) 130px}
-.mem .bar{position:static;display:inline-block;vertical-align:middle;margin-right:0}
-.mem .track{display:flex;align-items:center}
-.mem .anon{background:var(--bar)}
-.mem .file{background:#c5d0da}
-.notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 40px}
-.notes article{border-top:1px solid var(--rule);padding-top:10px}
-.notes h4{margin:0 0 4px;font:600 13px var(--mono)}
-.notes p{margin:0 0 6px;color:var(--dim);font-size:13px}
-.notes code{font:12px var(--mono);color:var(--ink);background:#eef1f4;padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
-.legend{margin:16px 0 0;color:var(--dim);font-size:12.5px;display:flex;gap:22px;flex-wrap:wrap}
-.legend i{display:inline-block;width:18px;height:9px;margin-right:6px;vertical-align:baseline;background:var(--bar)}
-.legend i.q{background:#a66bc9}
-.legend i.h{background:var(--bar) repeating-linear-gradient(135deg,rgba(255,255,255,.75) 0 2px,transparent 2px 5px)}
-@media(max-width:1100px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mem,.notes{grid-template-columns:1fr}header{grid-template-columns:1fr}}
-@media(max-width:700px){main{padding:32px 16px 64px}.grid{grid-template-columns:1fr}h1{font-size:34px}}
-"#;
-
-const SCRIPT: &str = r#"
-const buttons=document.querySelectorAll('.switch button');
-const show=k=>{document.body.dataset.view=k;buttons.forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===k))};
-buttons.forEach(b=>b.onclick=()=>show(b.dataset.k));
-show('rps');
-"#;
-
-pub fn page(rep: &Report) -> String {
-    let order = geomean_order(rep);
-
-    let mut o = String::new();
-    let _ = write!(
-        o,
-        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Blossom benchmark</title><style>{STYLE}</style><body data-view=rps><main>"
-    );
-    let _ = write!(
-        o,
-        "<header><div><h1>Blossom server benchmark</h1><p class=lede>{} servers run in containers with identical CPU and memory limits against the same load. Servers are ordered by the geometric mean of their throughput across every workload.</p></div><div class=switch role=group aria-label=\"Metric\">",
-        rep.servers.len()
-    );
-    for v in &VIEWS {
-        let _ = write!(o, "<button data-k={} aria-pressed=false>{}</button>", v.key, v.label);
-    }
-    o.push_str("</div></header>");
-    let _ = write!(
-        o,
-        "<div class=setup><span>run <b>{}</b></span><span>suite <b>{}</b></span><span>servers on CPUs <b>{}</b></span><span>load generator on CPUs <b>{}</b></span><span><b>{}</b> connections</span><span>host <b>{}</b> CPUs</span>{}{}</div>",
-        esc(&rep.when),
-        esc(rep.suite.rsplit('/').next().unwrap_or(&rep.suite)),
-        esc(&rep.server_cpus),
-        esc(&rep.load_cpus),
-        rep.connections,
-        rep.host_cpus,
-        if rep.ram_data { "<span class=dqt>all data in RAM, fsync is free</span>" } else { "" },
-        if rep.host_busy_pct > 5.0 { format!("<span class=flagtxt>benchmark CPUs {:.0}% busy with other work: numbers unreliable</span>", rep.host_busy_pct) } else { String::new() }
-    );
-    summary(&mut o, rep, &order);
-    o.push_str("<div class=legend><span><i></i>result</span><span><i class=h></i>some requests failed, so the rate is not a clean comparison</span><span><i class=q></i>disqualified handler, value shown but not comparable</span></div>");
-
-    for view in &VIEWS {
-        let _ = write!(o, "<div class=\"view v-{}\"><p class=unit>{}</p>", view.key, esc(view.unit));
-        for (title, workloads) in GROUPS {
-            let present: Vec<&&str> = workloads.iter().filter(|w| rep.servers.iter().any(|s| find(s, w).is_some())).collect();
-            if present.is_empty() {
-                continue;
-            }
-            let _ = write!(o, "<h2>{title}</h2><div class=grid>");
-            for w in present {
-                panel(&mut o, rep, &order, w, view);
-            }
-            o.push_str("</div>");
-        }
-        o.push_str("</div>");
-    }
-
-    o.push_str("<h2>Peak memory</h2><p class=unit style=\"margin:0 0 10px\">Highest resident memory seen in any workload, server plus its database. Dark is anonymous memory, light is file cache.</p><div class=mem>");
+fn memory_rows(rep: &Report, order: &[usize]) -> Vec<MemoryRow> {
     let peaks: Vec<(usize, f64, f64)> = order
         .iter()
         .map(|&i| {
@@ -453,51 +399,97 @@ pub fn page(rep: &Report) -> String {
         })
         .collect();
     let max_mb = peaks.iter().map(|(_, a, f)| a + f).fold(1.0, f64::max);
-    for (i, a, f) in peaks {
-        let _ = write!(
-            o,
-            "<div class=\"row{}\"><span class=name>{}</span><span class=track><i class=\"bar anon\" style=\"width:{:.2}%\"></i><i class=\"bar file\" style=\"width:{:.2}%\"></i></span><span class=val>{:.0} + {:.0} MB</span></div>",
-            "",
-            esc(&rep.servers[i].name),
-            a / max_mb * 100.0,
-            f / max_mb * 100.0,
-            a,
-            f
-        );
-    }
-    o.push_str("</div>");
+    peaks
+        .into_iter()
+        .map(|(i, a, f)| MemoryRow {
+            name: rep.servers[i].name.clone(),
+            anon_width: pct(a / max_mb * 100.0),
+            file_width: pct(f / max_mb * 100.0),
+            anon: format!("{a:.0}"),
+            file: format!("{f:.0}"),
+        })
+        .collect()
+}
 
-    o.push_str("<h2>Notes</h2><div class=notes>");
-    for &i in &order {
+fn note_blocks(rep: &Report, order: &[usize]) -> Vec<NoteBlock> {
+    let mut out = Vec::new();
+    for &i in order {
         let sv = &rep.servers[i];
-        let mut lines: Vec<String> = Vec::new();
+        let mut lines: Vec<NoteLine> = Vec::new();
+        let plain = |text: String| NoteLine { text, code: String::new(), tail: String::new() };
         if let Some(e) = &sv.error {
-            lines.push(format!("Failed to run: {}", esc(e.lines().next().unwrap_or(""))));
+            lines.push(plain(format!("Failed to run: {}", e.lines().next().unwrap_or(""))));
         }
         if !sv.notes.is_empty() {
-            lines.push(esc(&sv.notes));
+            lines.push(plain(sv.notes.clone()));
         }
         for r in &sv.results {
             if let Some(e) = &r.error_sample {
                 let short: String = e.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(140).collect();
-                lines.push(format!("{}: first failure was <code>{}</code>", esc(&r.name), esc(&short)));
+                lines.push(NoteLine { text: format!("{}: first failure was ", r.name), code: short, tail: String::new() });
             }
             if r.skipped.is_none() && r.load_gen_util > 0.85 {
-                lines.push(format!("{}: load generator was {:.0}% busy, so this may be its limit", esc(&r.name), r.load_gen_util * 100.0));
+                lines.push(plain(format!("{}: load generator was {:.0}% busy, so this may be its limit", r.name, r.load_gen_util * 100.0)));
             }
         }
-        if lines.is_empty() {
-            continue;
+        if !lines.is_empty() {
+            out.push(NoteBlock { name: sv.name.clone(), lines });
         }
-        let _ = write!(o, "<article><h4>{}</h4>", esc(&sv.name));
-        for l in lines {
-            let _ = write!(o, "<p>{l}</p>");
-        }
-        o.push_str("</article>");
     }
-    o.push_str("</div>");
-    let _ = write!(o, "<script>{SCRIPT}</script></main></html>");
-    o
+    out
+}
+
+const PAGE: &str = include_str!("../templates/page.html");
+const PANEL: &str = include_str!("../templates/panel.html");
+const SUMMARY: &str = include_str!("../templates/summary.html");
+const STYLE: &str = include_str!("../templates/style.css");
+const SCRIPT: &str = include_str!("../templates/script.js");
+
+pub fn page(rep: &Report) -> String {
+    let order = geomean_order(rep);
+    let chart_views = VIEWS
+        .iter()
+        .map(|view| ChartView {
+            key: view.key,
+            unit: view.unit,
+            groups: GROUPS
+                .iter()
+                .filter_map(|(title, workloads)| {
+                    let present: Vec<&&str> = workloads.iter().filter(|w| rep.servers.iter().any(|s| find(s, w).is_some())).collect();
+                    (!present.is_empty()).then(|| ChartGroup {
+                        title,
+                        panels: present.into_iter().map(|w| panel(rep, &order, w, view)).collect(),
+                    })
+                })
+                .collect(),
+        })
+        .collect();
+
+    let data = PageView {
+        style: STYLE,
+        script: SCRIPT,
+        server_count: rep.servers.len(),
+        views: VIEWS.iter().map(|v| ViewLink { key: v.key, label: v.label }).collect(),
+        when: rep.when.clone(),
+        suite: rep.suite.rsplit('/').next().unwrap_or(&rep.suite).to_string(),
+        server_cpus: rep.server_cpus.clone(),
+        load_cpus: rep.load_cpus.clone(),
+        connections: rep.connections,
+        host_cpus: rep.host_cpus,
+        ram_data: rep.ram_data,
+        busy_warning: if rep.host_busy_pct > 5.0 { format!("{:.0}", rep.host_busy_pct) } else { String::new() },
+        groups: GROUPS.iter().map(|(t, _)| GroupTitle { title: t }).collect(),
+        summary: summary_rows(rep, &order),
+        chart_views,
+        memory: memory_rows(rep, &order),
+        notes: note_blocks(rep, &order),
+    };
+
+    let mut engine: Ramhorns = Ramhorns::lazy(".").expect("template engine");
+    engine.insert(SUMMARY, "summary").expect("summary template");
+    engine.insert(PANEL, "panel").expect("panel template");
+    engine.insert(PAGE, "page").expect("page template");
+    engine.get("page").expect("page template").render(&data)
 }
 
 #[cfg(test)]
@@ -564,6 +556,14 @@ mod tests {
         let html = page(&rep);
         assert!(html.contains("a: offloaded, hands work to a queue"));
         assert!(html.contains("offloads: get-1k"));
+    }
+
+    #[test]
+    fn a_capped_upload_is_marked_on_its_bar() {
+        let mut rep = report();
+        rep.servers[0].results[0].capped = true;
+        let html = page(&rep);
+        assert!(html.contains("<b class=captag"));
     }
 
     #[test]

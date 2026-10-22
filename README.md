@@ -44,10 +44,19 @@ is a disqualification.
 
 ## Workloads
 
-`suites/*.toml`. `upload` workloads send `count` distinct blobs of `size` bytes, each with
-its own signed BUD-11 token. `get`, `head` and `miss` workloads read from the blobs of the
-upload workloads named in `blobs`. `zipf` skews reads toward a hot set. `content = "text"`
-makes compressible bodies.
+`suites/*.toml`. An `upload` workload with `duration_s` uploads distinct blobs of `size` bytes for
+that long, each with its own freshly signed BUD-11 token built by producer threads ahead of the
+connections, and stops early once `max_bytes` have been sent (default 3 GiB) so a fast server cannot
+fill the data directory. Its first `count` successful blobs are kept for the read workloads. Without
+`duration_s` it sends exactly `count` blobs, which for small blobs finishes in milliseconds and is
+too noisy to compare. `get`, `head` and `miss` workloads read from the blobs of the upload workloads
+named in `blobs` for `duration_s` (or the suite's). `zipf` skews reads toward a hot set.
+`content = "text"` makes compressible bodies. A row marked capped hit `max_bytes` before the deadline;
+its rate is still requests over the time it ran.
+
+`server_memory` is the container memory cap. With `--ram-data` the blobs a server stores count
+against it (tmpfs is charged to the writing container), so it must cover every upload workload's
+`max_bytes` plus the server itself.
 
 ## How servers are run
 

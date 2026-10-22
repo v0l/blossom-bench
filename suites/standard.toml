@@ -3,6 +3,7 @@ server_cpus = "0-3"
 load_cpus = "16-31"
 service_cpus = "8-11"
 connections = 64
+server_memory = "16g"
 duration_s = 10
 warmup_s = 2
 verify = 32
@@ -12,18 +13,23 @@ name = "put-1k"
 kind = "upload"
 size = 1024
 count = 3000
+duration_s = 10
 
 [[workload]]
 name = "put-64k"
 kind = "upload"
 size = 65536
 count = 600
+duration_s = 10
+max_bytes = 3221225472
 
 [[workload]]
 name = "put-1m"
 kind = "upload"
 size = 1048576
 count = 300
+duration_s = 10
+max_bytes = 4294967296
 
 [[workload]]
 name = "get-1k"

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -46,6 +47,8 @@ pub struct WorkloadResult {
     pub verified: usize,
     pub verify_bad: usize,
     pub skipped: Option<String>,
+    #[serde(default)]
+    pub capped: bool,
     #[serde(default)]
     pub disqualified: bool,
     #[serde(default)]
@@ -103,6 +106,110 @@ fn make_content(rng: &mut Rng, size: usize, kind: &str, index: usize) -> Vec<u8>
         data[..n].copy_from_slice(&PNG_MAGIC[..n]);
     }
     data
+}
+
+const DEFAULT_UPLOAD_BYTES: u64 = 3 << 30;
+const WARMUP_UPLOAD_BYTES: u64 = 256 << 20;
+
+struct FeedSpec {
+    addr: SocketAddr,
+    size: usize,
+    content_kind: String,
+    content_type: String,
+    path: String,
+    auth: String,
+    sha_header: bool,
+    resign: bool,
+    host: String,
+    bound: Option<String>,
+    signers: usize,
+}
+
+struct FeedStop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for FeedStop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn build_fed(spec: &FeedSpec, signer: &Signer, rng: &mut Rng, index: usize) -> Option<load::FedReq> {
+    let data = make_content(rng, spec.size, &spec.content_kind, index);
+    let hash = hex::encode(Sha256::digest(&data));
+    let token = signer.upload_token(&hash, &spec.host, &spec.auth, spec.bound.as_deref()).ok()?;
+    let mut h = headers(spec.addr);
+    h.insert(AUTHORIZATION, HeaderValue::from_str(&token).ok()?);
+    h.insert(CONTENT_TYPE, HeaderValue::from_str(&spec.content_type).ok()?);
+    if spec.sha_header {
+        h.insert("x-sha-256", HeaderValue::from_str(&hash).ok()?);
+    }
+    let resign: Option<std::sync::Arc<dyn Fn() -> Option<HeaderValue> + Send + Sync>> = if spec.resign {
+        let (signer, hash, host, auth, bound) = (signer.clone(), hash.clone(), spec.host.clone(), spec.auth.clone(), spec.bound.clone());
+        Some(std::sync::Arc::new(move || {
+            let t = signer.upload_token(&hash, &host, &auth, bound.as_deref()).ok()?;
+            HeaderValue::from_str(&t).ok()
+        }))
+    } else {
+        None
+    };
+    Some(load::FedReq {
+        spec: ReqSpec {
+            method: Method::PUT,
+            uri: spec.path.parse::<Uri>().ok()?,
+            headers: h,
+            body: Bytes::from(data),
+            ok_lo: 200,
+            ok_hi: 201,
+            expect_len: None,
+            follow_redirects: false,
+            resign,
+        },
+        hash,
+        size: spec.size as u64,
+    })
+}
+
+fn start_feed(spec: &FeedSpec, seed: u64, _keep: usize, conns: usize) -> (async_channel::Receiver<load::FedReq>, FeedStop) {
+    let depth = (conns * 4).max(64);
+    let (tx, rx) = async_channel::bounded::<load::FedReq>(depth);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let producers = 8usize;
+    let next = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for p in 0..producers {
+        let tx = tx.clone();
+        let stop = stop.clone();
+        let next = next.clone();
+        let spec = FeedSpec {
+            addr: spec.addr,
+            size: spec.size,
+            content_kind: spec.content_kind.clone(),
+            content_type: spec.content_type.clone(),
+            path: spec.path.clone(),
+            auth: spec.auth.clone(),
+            sha_header: spec.sha_header,
+            resign: spec.resign,
+            host: spec.host.clone(),
+            bound: spec.bound.clone(),
+            signers: spec.signers,
+        };
+        std::thread::spawn(move || {
+            let pool: Vec<Signer> = (0..spec.signers.max(1)).filter_map(|i| Signer::numbered(i).ok()).collect();
+            if pool.is_empty() {
+                return;
+            }
+            let mut rng = Rng((seed ^ (p as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15)) | 1);
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(item) = build_fed(&spec, &pool[i % pool.len()], &mut rng, i) else {
+                    break;
+                };
+                if tx.send_blocking(item).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    (rx, FeedStop(stop))
 }
 
 fn zipf_order(n: usize, s: f64, rng: &mut Rng) -> Vec<u32> {
@@ -175,11 +282,57 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         order,
         mode,
         connections: conns,
+        feed: None,
+        keep: 0,
+        byte_budget: None,
     };
 
     let measured_mode;
+    let mut timed_upload: Option<(Plan, Duration, FeedStop)> = None;
     let mut build: Box<dyn FnMut(Mode) -> Plan>;
     match w.kind {
+        Kind::Upload if w.duration_s.is_some() => {
+            let size = w.size.expect("validated") as usize;
+            let dur = Duration::from_secs(w.duration_s.unwrap_or(ctx.run.duration_s));
+            let content_kind = ctx.def.upload.content.as_deref().unwrap_or(&w.content).to_string();
+            let content_type = match &ctx.def.upload.content_type {
+                Some(c) => c.clone(),
+                None if content_kind == "png" => "image/png".into(),
+                None if content_kind == "text" => "text/plain".into(),
+                None => "application/octet-stream".into(),
+            };
+            let spec = FeedSpec {
+                addr: ctx.addr,
+                size,
+                content_kind,
+                content_type,
+                path: ctx.def.upload.path.clone(),
+                auth: ctx.def.upload.auth.clone(),
+                sha_header: ctx.def.upload.sha_header,
+                resign: ctx.def.upload.resign,
+                host: host.clone(),
+                bound: bound.clone(),
+                signers: ctx.def.upload.signers.max(1),
+            };
+            let keep_blobs = w.count.unwrap_or(2000).max(ctx.run.verify.max(1));
+            let warm = Duration::from_secs(ctx.run.warmup_s);
+            if !warm.is_zero() {
+                let (feed, stop) = start_feed(&spec, seed ^ 0x77, 0, conns);
+                let mut p = plan(Mode::Count, Vec::new(), None);
+                p.feed = Some(feed);
+                p.byte_budget = Some(WARMUP_UPLOAD_BYTES.min(w.max_bytes.unwrap_or(DEFAULT_UPLOAD_BYTES) / 8));
+                let _ = load::run_for(ctx.addr, p, warm).await;
+                drop(stop);
+            }
+            let (feed, stop) = start_feed(&spec, seed, keep_blobs, conns);
+            let mut p = plan(Mode::Count, Vec::new(), None);
+            p.feed = Some(feed);
+            p.keep = keep_blobs;
+            p.byte_budget = Some(w.max_bytes.unwrap_or(DEFAULT_UPLOAD_BYTES));
+            timed_upload = Some((p, dur, stop));
+            measured_mode = Mode::For(dur);
+            build = Box::new(|mode| Plan { reqs: Vec::new(), order: None, mode, connections: 0, feed: None, keep: 0, byte_budget: None });
+        }
         Kind::Upload => {
             let size = w.size.expect("validated") as usize;
             let count = w.count.expect("validated");
@@ -287,7 +440,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                         .collect(),
                 };
                 let order = if kind == Kind::Miss { None } else { order.clone() };
-                Plan { reqs, order, mode, connections: conns }
+                Plan { reqs, order, mode, connections: conns, feed: None, keep: 0, byte_budget: None }
             });
         }
     }
@@ -299,7 +452,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
 
     if let Mode::For(_) = measured_mode {
         let warm = Duration::from_secs(ctx.run.warmup_s);
-        if !warm.is_zero() {
+        if !warm.is_zero() && timed_upload.is_none() {
             load::run(ctx.addr, build(Mode::For(warm))).await;
         }
     }
@@ -307,7 +460,16 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
     let sampler = Sampler::start(ctx.roots.clone());
     let cpu0 = sys::cpu_seconds(&ctx.roots);
     let self0 = sys::self_cpu_seconds();
-    let out: Outcome = load::run(ctx.addr, build(measured_mode)).await;
+    let out: Outcome = match timed_upload.take() {
+        Some((p, dur, stop)) => {
+            let started = std::time::Instant::now();
+            let mut out = load::run_for(ctx.addr, p, dur).await;
+            out.wall = started.elapsed();
+            drop(stop);
+            out
+        }
+        None => load::run(ctx.addr, build(measured_mode)).await,
+    };
     let cpu1 = sys::cpu_seconds(&ctx.roots);
     let self1 = sys::self_cpu_seconds();
     let mem = sampler.finish().await;
@@ -320,7 +482,11 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         if ctx.def.upload.settle_s > 0 {
             tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
         }
-        let kept: Vec<Blob> = out.ok_idx.iter().map(|&i| upload_all[i as usize].clone()).collect();
+        let kept: Vec<Blob> = if w.duration_s.is_some() {
+            out.kept.iter().map(|(hash, size)| Blob { hash: hash.clone(), size: *size }).collect()
+        } else {
+            out.ok_idx.iter().map(|&i| upload_all[i as usize].clone()).collect()
+        };
         verified = verify(ctx, &kept, &mut rng).await;
         ctx.blobs.insert(w.name.clone(), kept);
     }
@@ -351,6 +517,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         verified: verified.0,
         verify_bad: verified.1,
         skipped: None,
+        capped: w.kind == Kind::Upload && w.duration_s.is_some() && secs + 0.5 < w.duration_s.unwrap_or(0) as f64,
         disqualified: offload.as_ref().is_some_and(|o| o.disqualify),
         offloaded: offload.map(|o| o.reason),
         error_sample: out.error_sample,
@@ -360,6 +527,50 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn feed_spec(size: usize) -> FeedSpec {
+        FeedSpec {
+            addr: "127.0.0.1:18100".parse().unwrap(),
+            size,
+            content_kind: "random".into(),
+            content_type: "application/octet-stream".into(),
+            path: "/upload".into(),
+            auth: "std".into(),
+            sha_header: false,
+            resign: false,
+            host: "127.0.0.1".into(),
+            bound: None,
+            signers: 1,
+        }
+    }
+
+    #[test]
+    fn a_fed_request_is_built_with_its_hash_and_size() {
+        let signer = Signer::numbered(0).unwrap();
+        let item = build_fed(&feed_spec(1024), &signer, &mut Rng(3), 0).expect("a request");
+        assert_eq!(item.size, 1024);
+        assert_eq!(item.hash.len(), 64);
+        assert_eq!(item.spec.body.len(), 1024);
+        assert_eq!(hex::encode(Sha256::digest(&item.spec.body)), item.hash);
+        assert!(item.spec.headers.contains_key(AUTHORIZATION));
+    }
+
+    #[test]
+    fn a_feed_produces_distinct_blobs_and_stops_when_told() {
+        let (rx, stop) = start_feed(&feed_spec(256), 7, 0, 4);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..40 {
+            let item = rx.recv_blocking().expect("an item");
+            assert!(seen.insert(item.hash));
+        }
+        drop(stop);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut drained = 0;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert!(drained <= 64 + 8, "the producers must stop soon after the stop flag");
+    }
 
     #[test]
     fn content_is_deterministic_per_seed_and_distinct_per_index() {

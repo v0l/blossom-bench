@@ -1,0 +1,24 @@
+<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Blossom benchmark</title><style>
+{{{style}}}
+</style><body data-view=rps><main>
+<header><div><h1>Blossom server benchmark</h1><p class=lede>{{server_count}} servers run in containers with identical CPU and memory limits against the same load. Servers are ordered by the geometric mean of their throughput across every workload.</p></div><div class=switch role=group aria-label="Metric">{{#views}}<button data-k={{key}} aria-pressed=false>{{label}}</button>{{/views}}</div></header>
+<div class=setup><span>run <b>{{when}}</b></span><span>suite <b>{{suite}}</b></span><span>servers on CPUs <b>{{server_cpus}}</b></span><span>load generator on CPUs <b>{{load_cpus}}</b></span><span><b>{{connections}}</b> connections</span><span>host <b>{{host_cpus}}</b> CPUs</span>{{#ram_data}}<span class=dqt>all data in RAM, fsync is free</span>{{/ram_data}}{{#busy_warning}}<span class=flagtxt>benchmark CPUs {{busy_warning}}% busy with other work: numbers unreliable</span>{{/busy_warning}}</div>
+{{>summary}}
+<div class=legend><span><i></i>result</span><span><i class=h></i>some requests failed, so the rate is not a clean comparison</span><span><i class=q></i>disqualified handler, value shown but not comparable</span></div>
+{{#chart_views}}
+<div class="view v-{{key}}"><p class=unit>{{unit}}</p>
+{{#groups}}<h2>{{title}}</h2><div class=grid>
+{{#panels}}{{>panel}}{{/panels}}
+</div>
+{{/groups}}
+</div>
+{{/chart_views}}
+<h2>Peak memory</h2><p class=unit style="margin:0 0 10px">Highest resident memory seen in any workload, server plus its database. Dark is anonymous memory, light is file cache.</p><div class=mem>
+{{#memory}}<div class=row><span class=name>{{name}}</span><span class=track><i class="bar anon" style="width:{{anon_width}}%"></i><i class="bar file" style="width:{{file_width}}%"></i></span><span class=val>{{anon}} + {{file}} MB</span></div>{{/memory}}
+</div>
+<h2>Notes</h2><div class=notes>
+{{#notes}}<article><h4>{{name}}</h4>{{#lines}}<p>{{text}}{{#code}}<code>{{code}}</code>{{/code}}{{#tail}}{{tail}}{{/tail}}</p>{{/lines}}</article>{{/notes}}
+</div>
+<script>
+{{{script}}}
+</script></main></html>

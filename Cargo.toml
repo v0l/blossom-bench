@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+async-channel = "2.5.0"
 base64 = "0.23.1"
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
@@ -14,6 +15,7 @@ http-body-util = "0.1.5"
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 libc = "0.2.191"
+ramhorns = "1.0.1"
 secp256k1 = { version = "0.33.1", features = ["rand"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

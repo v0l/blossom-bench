@@ -161,6 +161,7 @@ pub struct Workload {
     pub size: Option<u64>,
     pub count: Option<usize>,
     pub duration_s: Option<u64>,
+    pub max_bytes: Option<u64>,
     pub connections: Option<usize>,
     #[serde(default)]
     pub blobs: Vec<String>,
@@ -199,6 +200,9 @@ pub fn load_suite(path: &Path) -> Result<Suite> {
         match w.kind {
             Kind::Upload => {
                 anyhow::ensure!(w.size.is_some() && w.count.is_some(), "{}: upload needs size and count", w.name);
+                if w.duration_s.is_some() {
+                    anyhow::ensure!(w.size.unwrap_or(0) >= 64, "{}: a timed upload needs size of at least 64 bytes", w.name);
+                }
             }
             _ => anyhow::ensure!(!w.blobs.is_empty(), "{}: needs blobs", w.name),
         }

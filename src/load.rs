@@ -45,11 +45,20 @@ pub enum Mode {
     For(Duration),
 }
 
+pub struct FedReq {
+    pub spec: ReqSpec,
+    pub hash: String,
+    pub size: u64,
+}
+
 pub struct Plan {
+    pub byte_budget: Option<u64>,
     pub reqs: Vec<ReqSpec>,
     pub order: Option<Vec<u32>>,
     pub mode: Mode,
     pub connections: usize,
+    pub feed: Option<async_channel::Receiver<FedReq>>,
+    pub keep: usize,
 }
 
 pub struct Outcome {
@@ -63,6 +72,7 @@ pub struct Outcome {
     pub status: BTreeMap<u16, u64>,
     pub hist: Histogram<u64>,
     pub ok_idx: Vec<u32>,
+    pub kept: Vec<(String, u64)>,
     pub error_sample: Option<String>,
 }
 
@@ -76,6 +86,7 @@ struct Tally {
     status: BTreeMap<u16, u64>,
     hist: Histogram<u64>,
     ok_idx: Vec<u32>,
+    kept: Vec<(String, u64)>,
     error_sample: Option<String>,
 }
 
@@ -91,6 +102,7 @@ impl Tally {
             status: BTreeMap::new(),
             hist: Histogram::new_with_bounds(1, 120_000_000, 3).expect("histogram bounds"),
             ok_idx: Vec::new(),
+            kept: Vec::new(),
             error_sample: None,
         }
     }
@@ -169,31 +181,59 @@ async fn follow(target: &mut Option<(String, http1::SendRequest<Full<Bytes>>)>, 
     None
 }
 
-async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, deadline: Option<Instant>) -> Tally {
+async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, kept_count: Arc<AtomicUsize>, sent_bytes: Arc<std::sync::atomic::AtomicU64>, deadline: Option<Instant>) -> Tally {
     let mut tally = Tally::new();
     let n = plan.reqs.len();
     let mut conn: Option<http1::SendRequest<Full<Bytes>>> = None;
     let mut target: Option<(String, http1::SendRequest<Full<Bytes>>)> = None;
     loop {
-        let seq = counter.fetch_add(1, Ordering::Relaxed);
-        let idx = match plan.mode {
-            Mode::Count => {
-                if seq >= n {
-                    break;
-                }
-                seq
+        let mut fed_slot: Option<FedReq> = None;
+        let idx = if let Some(feed) = &plan.feed {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                break;
             }
-            Mode::For(_) => {
-                if Instant::now() >= deadline.expect("deadline in duration mode") {
-                    break;
+            if plan.byte_budget.is_some_and(|b| sent_bytes.load(Ordering::Relaxed) >= b) {
+                break;
+            }
+            let received = match deadline {
+                Some(d) => match tokio::time::timeout_at(tokio::time::Instant::from_std(d), feed.recv()).await {
+                    Ok(r) => r,
+                    Err(_) => break,
+                },
+                None => feed.recv().await,
+            };
+            match received {
+                Ok(item) => {
+                    sent_bytes.fetch_add(item.size, Ordering::Relaxed);
+                    fed_slot = Some(item);
+                    0
                 }
-                match &plan.order {
-                    Some(order) => order[seq % order.len()] as usize,
-                    None => seq % n,
+                Err(_) => break,
+            }
+        } else {
+            let seq = counter.fetch_add(1, Ordering::Relaxed);
+            match plan.mode {
+                Mode::Count => {
+                    if seq >= n {
+                        break;
+                    }
+                    seq
+                }
+                Mode::For(_) => {
+                    if Instant::now() >= deadline.expect("deadline in duration mode") {
+                        break;
+                    }
+                    match &plan.order {
+                        Some(order) => order[seq % order.len()] as usize,
+                        None => seq % n,
+                    }
                 }
             }
         };
-        let spec = &plan.reqs[idx];
+        let spec = match &fed_slot {
+            Some(f) => &f.spec,
+            None => &plan.reqs[idx],
+        };
         let mut attempts = 0;
         loop {
             if conn.is_none() {
@@ -218,11 +258,20 @@ async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, de
             };
             let resp = match sent {
                 Ok(r) => r,
-                Err(_) => {
+                Err(e) => {
                     conn = None;
                     attempts += 1;
                     if attempts >= 2 {
                         tally.io_err += 1;
+                        if tally.error_sample.is_none() {
+                            let mut text = e.to_string();
+                            let mut src = std::error::Error::source(&e);
+                            while let Some(s) = src {
+                                text.push_str(&format!(": {s}"));
+                                src = s.source();
+                            }
+                            tally.error_sample = Some(format!("connection error: {text}"));
+                        }
                         break;
                     }
                     continue;
@@ -271,7 +320,11 @@ async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, de
             if status_ok && len_ok {
                 tally.ok += 1;
                 tally.bytes_out_ok += spec.body.len() as u64;
-                if matches!(plan.mode, Mode::Count) {
+                if let Some(f) = &fed_slot {
+                    if kept_count.load(Ordering::Relaxed) < plan.keep && kept_count.fetch_add(1, Ordering::Relaxed) < plan.keep {
+                        tally.kept.push((f.hash.clone(), f.size));
+                    }
+                } else if matches!(plan.mode, Mode::Count) {
                     tally.ok_idx.push(idx as u32);
                 }
             }
@@ -282,17 +335,33 @@ async fn worker(addr: SocketAddr, plan: Arc<Plan>, counter: Arc<AtomicUsize>, de
     tally
 }
 
+pub async fn run_for(addr: SocketAddr, plan: Plan, duration: Duration) -> Outcome {
+    let feed = plan.feed.clone();
+    let out = run_inner(addr, plan, Some(duration)).await;
+    if let Some(f) = feed {
+        f.close();
+    }
+    out
+}
+
 pub async fn run(addr: SocketAddr, plan: Plan) -> Outcome {
+    run_inner(addr, plan, None).await
+}
+
+async fn run_inner(addr: SocketAddr, plan: Plan, fed_deadline: Option<Duration>) -> Outcome {
     let plan = Arc::new(plan);
     let counter = Arc::new(AtomicUsize::new(0));
+    let kept_count = Arc::new(AtomicUsize::new(0));
+    let sent_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let started = Instant::now();
-    let deadline = match plan.mode {
-        Mode::For(d) => Some(started + d),
-        Mode::Count => None,
+    let deadline = match (plan.mode, fed_deadline) {
+        (_, Some(d)) => Some(started + d),
+        (Mode::For(d), None) => Some(started + d),
+        (Mode::Count, None) => None,
     };
     let mut handles = Vec::new();
     for _ in 0..plan.connections {
-        handles.push(tokio::spawn(worker(addr, plan.clone(), counter.clone(), deadline)));
+        handles.push(tokio::spawn(worker(addr, plan.clone(), counter.clone(), kept_count.clone(), sent_bytes.clone(), deadline)));
     }
     let mut out = Outcome {
         wall: Duration::ZERO,
@@ -305,6 +374,7 @@ pub async fn run(addr: SocketAddr, plan: Plan) -> Outcome {
         status: BTreeMap::new(),
         hist: Histogram::new_with_bounds(1, 120_000_000, 3).expect("histogram bounds"),
         ok_idx: Vec::new(),
+        kept: Vec::new(),
         error_sample: None,
     };
     for h in handles {
@@ -320,6 +390,7 @@ pub async fn run(addr: SocketAddr, plan: Plan) -> Outcome {
         }
         out.hist.add(&t.hist).expect("merge histograms");
         out.ok_idx.extend(t.ok_idx);
+        out.kept.extend(t.kept);
         if out.error_sample.is_none() {
             out.error_sample = t.error_sample;
         }
@@ -426,7 +497,7 @@ mod tests {
     async fn counts_each_request_once_and_records_ok_indexes() {
         let addr = serve().await;
         let reqs = (0..50).map(|_| spec("/put", Method::PUT, 200, 201, None, b"abc")).collect();
-        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 8 }).await;
+        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 8, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!(out.total, 50);
         assert_eq!(out.ok, 50);
         assert_eq!(out.ok_idx, (0..50).collect::<Vec<u32>>());
@@ -442,7 +513,7 @@ mod tests {
             spec("/short", Method::GET, 200, 200, Some(5), b""),
             spec("/gone", Method::GET, 200, 200, None, b""),
         ];
-        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 2 }).await;
+        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 2, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!(out.total, 3);
         assert_eq!(out.ok, 1);
         assert_eq!(out.bad_len, 1);
@@ -453,7 +524,7 @@ mod tests {
     async fn a_redirect_is_not_ok_unless_followed_to_the_right_bytes() {
         let addr = serve().await;
         let plain = vec![spec("/redir-ok", Method::GET, 200, 200, Some(5), b"")];
-        let out = run(addr, Plan { reqs: plain, order: None, mode: Mode::Count, connections: 1 }).await;
+        let out = run(addr, Plan { reqs: plain, order: None, mode: Mode::Count, connections: 1, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!((out.ok, out.status[&302]), (0, 1));
 
         let reqs = vec![
@@ -461,7 +532,7 @@ mod tests {
             following("/redir-short", Some(5)),
             following("/redir-gone", Some(5)),
         ];
-        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 1 }).await;
+        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 1, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!(out.total, 3);
         assert_eq!(out.ok, 1);
         assert_eq!(out.bad_len, 1);
@@ -473,7 +544,7 @@ mod tests {
     async fn a_redirect_loop_does_not_count_as_a_success() {
         let addr = serve().await;
         let reqs = vec![following("/redir-loop", Some(5))];
-        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 1 }).await;
+        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 1, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!(out.ok, 0);
     }
 
@@ -484,13 +555,50 @@ mod tests {
         assert_eq!(fetch(addr, "/redir-ok", false).await.unwrap().0, 302);
     }
 
+    fn fed(path: &str, n: usize) -> (async_channel::Receiver<FedReq>, async_channel::Sender<FedReq>) {
+        let (tx, rx) = async_channel::bounded(1024);
+        for i in 0..n {
+            let _ = tx.try_send(FedReq {
+                spec: spec(path, Method::PUT, 200, 201, None, b"abc"),
+                hash: format!("h{i}"),
+                size: 3,
+            });
+        }
+        (rx, tx)
+    }
+
+    #[tokio::test]
+    async fn a_fed_upload_stops_at_the_deadline_and_remembers_up_to_keep_blobs() {
+        let addr = serve().await;
+        let (rx, _tx) = fed("/put", 200);
+        let plan = Plan { reqs: Vec::new(), order: None, mode: Mode::Count, connections: 4, feed: Some(rx), keep: 50, byte_budget: None };
+        let started = Instant::now();
+        let out = run_for(addr, plan, Duration::from_millis(300)).await;
+        assert!(started.elapsed() < Duration::from_secs(2), "must stop near the deadline");
+        assert_eq!(out.ok, 200);
+        assert_eq!(out.kept.len(), 50);
+        assert!(out.kept.iter().all(|(h, size)| h.starts_with('h') && *size == 3));
+    }
+
+    #[tokio::test]
+    async fn a_fed_upload_with_no_more_work_ends_before_the_deadline() {
+        let addr = serve().await;
+        let (rx, tx) = fed("/put", 10);
+        drop(tx);
+        let plan = Plan { reqs: Vec::new(), order: None, mode: Mode::Count, connections: 2, feed: Some(rx), keep: 5, byte_budget: None };
+        let started = Instant::now();
+        let out = run_for(addr, plan, Duration::from_secs(5)).await;
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(out.ok, 10);
+    }
+
     #[tokio::test]
     async fn duration_mode_runs_until_the_deadline() {
         let addr = serve().await;
         let reqs = vec![spec("/ok", Method::GET, 200, 200, Some(5), b"")];
         let out = run(
             addr,
-            Plan { reqs, order: None, mode: Mode::For(Duration::from_millis(300)), connections: 4 },
+            Plan { reqs, order: None, mode: Mode::For(Duration::from_millis(300)), connections: 4, feed: None, keep: 0, byte_budget: None },
         )
         .await;
         assert!(out.ok > 100, "only {} requests", out.ok);
@@ -503,7 +611,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         drop(l);
         let reqs = (0..3).map(|_| spec("/ok", Method::GET, 200, 200, None, b"")).collect();
-        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 2 }).await;
+        let out = run(addr, Plan { reqs, order: None, mode: Mode::Count, connections: 2, feed: None, keep: 0, byte_budget: None }).await;
         assert_eq!(out.ok, 0);
         assert_eq!(out.io_err, 3);
     }
