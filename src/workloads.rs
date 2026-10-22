@@ -159,7 +159,12 @@ async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) 
 pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<WorkloadResult> {
     let offload = ctx.def.offload(w.kind).cloned();
     let mut rng = Rng(seed ^ 0x9E3779B97F4A7C15 | 1);
-    let conns = w.connections.unwrap_or(ctx.run.connections);
+    let mut conns = w.connections.unwrap_or(ctx.run.connections);
+    if w.kind == Kind::Upload {
+        if let Some(cap) = ctx.def.upload.max_connections {
+            conns = conns.min(cap);
+        }
+    }
     let host = ctx.addr.ip().to_string();
     let follow_redirects = ctx.def.follow_redirects;
     let bound = ctx.def.upload.bound_auth.then(|| format!("http://{}", ctx.addr));
@@ -183,10 +188,14 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
             }
             let content_kind = ctx.def.upload.content.as_deref().unwrap_or(&w.content);
             let mut reqs = Vec::with_capacity(count);
+            let pool: Vec<Signer> = (0..ctx.def.upload.signers.max(1))
+                .map(Signer::numbered)
+                .collect::<Result<_>>()?;
             for i in 0..count {
+                let signer = &pool[i % pool.len()];
                 let data = make_content(&mut rng, size, content_kind, i);
                 let hash = hex::encode(Sha256::digest(&data));
-                let token = ctx.signer.upload_token(&hash, &host, &ctx.def.upload.auth, bound.as_deref())?;
+                let token = signer.upload_token(&hash, &host, &ctx.def.upload.auth, bound.as_deref())?;
                 let mut h = headers(ctx.addr);
                 h.insert(AUTHORIZATION, HeaderValue::from_str(&token)?);
                 let ct = match &ctx.def.upload.content_type {
@@ -201,7 +210,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
                 }
                 let resign: Option<std::sync::Arc<dyn Fn() -> Option<HeaderValue> + Send + Sync>> = if ctx.def.upload.resign {
                     let (signer, hash, host, auth, bound) =
-                        (ctx.signer.clone(), hash.clone(), host.clone(), ctx.def.upload.auth.clone(), bound.clone());
+                        (signer.clone(), hash.clone(), host.clone(), ctx.def.upload.auth.clone(), bound.clone());
                     Some(std::sync::Arc::new(move || {
                         let t = signer.upload_token(&hash, &host, &auth, bound.as_deref()).ok()?;
                         HeaderValue::from_str(&t).ok()

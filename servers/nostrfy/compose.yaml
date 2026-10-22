@@ -1,0 +1,12 @@
+services:
+  server:
+    extends: {file: ../common.yaml, service: app}
+    build:
+      context: "https://github.com/iqbqioza/nostrfy.git"
+      dockerfile: "Dockerfile"
+    image: bb-nostrfy:bench
+    command: ["nostrfy", "--config", "/data/nostrfy.toml", "start", "--foreground"]
+    environment:
+      RUST_LOG: "warn"
+    healthcheck:
+      disable: true

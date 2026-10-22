@@ -65,6 +65,9 @@ pub struct UploadSpec {
     pub settle_s: u64,
     #[serde(default)]
     pub resign: bool,
+    #[serde(default)]
+    pub signers: usize,
+    pub max_connections: Option<usize>,
 }
 
 impl Default for UploadSpec {
@@ -78,6 +81,8 @@ impl Default for UploadSpec {
             content: None,
             settle_s: 0,
             resign: false,
+            signers: 0,
+            max_connections: None,
         }
     }
 }

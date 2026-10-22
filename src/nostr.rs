@@ -66,6 +66,15 @@ impl Signer {
         Self::from_bytes(Sha256::digest(b"blossom-bench signing key").into())
     }
 
+    pub fn numbered(n: usize) -> Result<Self> {
+        if n == 0 {
+            return Self::fixed();
+        }
+        let mut seed = b"blossom-bench signing key ".to_vec();
+        seed.extend_from_slice(n.to_string().as_bytes());
+        Self::from_bytes(Sha256::digest(&seed).into())
+    }
+
     pub fn new() -> Result<Self> {
         Self::from_bytes(random_bytes::<32>()?)
     }

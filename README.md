@@ -71,7 +71,9 @@ Make `servers/<name>/` with:
   (created empty under the data dir), `follow_redirects` (for a server whose GET redirects to the bytes), `[[offloaded]]` (`kind`, `reason`, `disqualify`), `[[after_ready]]` (`service` + `cmd`, run with `docker compose exec` once the
   server answers, for seeding) and `[upload]`: `path`, `auth = "std" | "url"` base64
   alphabet, `bound_auth` (sign `server`, `u` and `method` tags), `sha_header`,
-  `content_type`, `content` (`random`, `text`, `png`), `settle_s`.
+  `content_type`, `content` (`random`, `text`, `png`), `settle_s`, `resign`, `signers` (sign with this many
+  different keys, for servers that cap uploads per key) and `max_connections` (cap upload connections for
+  servers that refuse more).
 - `files/`: copied into the data dir before start, which the server sees at `/data`.
 
 `${BB_PORT}`, `${BB_PUBKEY}` and `${BB_NPUB}` are also expanded inside `files/` and
@@ -84,7 +86,7 @@ benchmark key that signs every upload, so a server can allow-list or register it
 
 route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
 MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
-servus-social/servus, Sakura (Odin), barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
+servus-social/servus, Sakura (Odin), iqbqioza/nostrfy, barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
 package), and damus-io/afterbloom.
 
 Not included: satellite-cdn, which needs Cloudflare R2, and nostrbuild/nostr.build, whose repo holds
