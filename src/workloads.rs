@@ -50,6 +50,8 @@ pub struct WorkloadResult {
     #[serde(default)]
     pub capped: bool,
     #[serde(default)]
+    pub seed_missing: usize,
+    #[serde(default)]
     pub disqualified: bool,
     #[serde(default)]
     pub offloaded: Option<String>,
@@ -263,7 +265,117 @@ async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) 
     (n, bad)
 }
 
-pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<WorkloadResult> {
+const SEED_RETRIES: usize = 20;
+
+async fn seed(ctx: &mut Ctx<'_>, w: &Workload) -> Result<WorkloadResult> {
+    let size = w.size.expect("validated") as usize;
+    let count = w.count.expect("validated");
+    let conns = ctx.def.upload.max_connections.map_or(ctx.run.connections, |c| c.min(ctx.run.connections));
+    let content_kind = ctx.def.upload.content.as_deref().unwrap_or(&w.content).to_string();
+    let content_type = match &ctx.def.upload.content_type {
+        Some(c) => c.clone(),
+        None if content_kind == "png" => "image/png".into(),
+        None if content_kind == "text" => "text/plain".into(),
+        None => "application/octet-stream".into(),
+    };
+    let spec = FeedSpec {
+        addr: ctx.addr,
+        size,
+        content_kind,
+        content_type,
+        path: ctx.def.upload.path.clone(),
+        auth: ctx.def.upload.auth.clone(),
+        sha_header: ctx.def.upload.sha_header,
+        resign: ctx.def.upload.resign,
+        host: ctx.addr.ip().to_string(),
+        bound: ctx.def.upload.bound_auth.then(|| format!("http://{}", ctx.addr)),
+        signers: ctx.def.upload.signers.max(1),
+    };
+    let pool: Vec<Signer> = (0..spec.signers).map(Signer::numbered).collect::<Result<_>>()?;
+    let seed_value = seed_of(&w.name);
+    let mut rng = Rng(seed_value | 1);
+    let mut pending: Vec<load::FedReq> = Vec::with_capacity(count);
+    for i in 0..count {
+        let item = build_fed(&spec, &pool[i % pool.len()], &mut rng, i).ok_or_else(|| anyhow::anyhow!("could not build seed blob {i}"))?;
+        pending.push(item);
+    }
+    let started = std::time::Instant::now();
+    let mut stored: Vec<Blob> = Vec::with_capacity(count);
+    let mut attempts = 0usize;
+    let mut last_error = None;
+    let mut rounds = 0usize;
+    while !pending.is_empty() && rounds < SEED_RETRIES {
+        rounds += 1;
+        let blobs: Vec<Blob> = pending.iter().map(|f| Blob { hash: f.hash.clone(), size: f.size }).collect();
+        let reqs: Vec<ReqSpec> = pending
+            .iter()
+            .map(|f| ReqSpec {
+                method: f.spec.method.clone(),
+                uri: f.spec.uri.clone(),
+                headers: f.spec.headers.clone(),
+                body: f.spec.body.clone(),
+                ok_lo: 200,
+                ok_hi: 201,
+                expect_len: None,
+                follow_redirects: false,
+                resign: f.spec.resign.clone(),
+            })
+            .collect();
+        attempts += reqs.len();
+        let out = load::run(ctx.addr, Plan { reqs, order: None, mode: Mode::Count, connections: conns, feed: None, keep: 0, byte_budget: None }).await;
+        if out.error_sample.is_some() {
+            last_error = out.error_sample.clone();
+        }
+        let ok: std::collections::HashSet<u32> = out.ok_idx.iter().copied().collect();
+        for (i, b) in blobs.into_iter().enumerate() {
+            if ok.contains(&(i as u32)) {
+                stored.push(b);
+            }
+        }
+        let mut idx = 0u32;
+        pending.retain(|_| {
+            let keep = !ok.contains(&idx);
+            idx += 1;
+            keep
+        });
+        if !pending.is_empty() {
+            tokio::time::sleep(Duration::from_millis(250 * rounds as u64)).await;
+        }
+    }
+    if ctx.def.upload.settle_s > 0 {
+        tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+    }
+    let mut vrng = Rng(seed_value ^ 0xBEEF | 1);
+    let verified = verify(ctx, &stored, &mut vrng).await;
+    let secs = started.elapsed().as_secs_f64();
+    let missing = count - stored.len();
+    ctx.blobs.insert(w.name.clone(), stored);
+    Ok(WorkloadResult {
+        name: w.name.clone(),
+        kind: "seed".into(),
+        size: w.size,
+        connections: conns,
+        requests: attempts as u64,
+        ok: (count - missing) as u64,
+        seconds: secs,
+        verified: verified.0,
+        verify_bad: verified.1,
+        seed_missing: missing,
+        error_sample: if missing > 0 { last_error } else { None },
+        ..Default::default()
+    })
+}
+
+fn seed_of(name: &str) -> u64 {
+    let h = Sha256::digest(format!("blossom-bench seed {name}").as_bytes());
+    u64::from_le_bytes(h[..8].try_into().expect("8 bytes"))
+}
+
+pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed_arg: u64) -> Result<WorkloadResult> {
+    if w.kind == Kind::Seed {
+        return seed(ctx, w).await;
+    }
+    let seed = seed_arg;
     let offload = ctx.def.offload(w.kind).cloned();
     let mut rng = Rng(seed ^ 0x9E3779B97F4A7C15 | 1);
     let mut conns = w.connections.unwrap_or(ctx.run.connections);
@@ -388,6 +500,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
             let mut slot = Some(reqs);
             build = Box::new(move |mode| plan(mode, slot.take().unwrap_or_default(), None));
         }
+        Kind::Seed => unreachable!("a seed returns before the plan is built"),
         Kind::Get | Kind::Head | Kind::Miss => {
             for name in &w.blobs {
                 if let Some(v) = ctx.blobs.get(name) {
@@ -518,6 +631,7 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed: u64) -> Result<Workl
         verify_bad: verified.1,
         skipped: None,
         capped: w.kind == Kind::Upload && w.duration_s.is_some() && secs + 0.5 < w.duration_s.unwrap_or(0) as f64,
+        seed_missing: 0,
         disqualified: offload.as_ref().is_some_and(|o| o.disqualify),
         offloaded: offload.map(|o| o.reason),
         error_sample: out.error_sample,

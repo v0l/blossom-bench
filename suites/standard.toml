@@ -3,61 +3,80 @@ server_cpus = "0-3"
 load_cpus = "16-31"
 service_cpus = "8-11"
 connections = 64
-server_memory = "16g"
+server_memory = "20g"
 duration_s = 10
 warmup_s = 2
 verify = 32
 
 [[workload]]
+name = "seed-1k"
+kind = "seed"
+size = 1024
+count = 100000
+
+[[workload]]
+name = "seed-64k"
+kind = "seed"
+size = 65536
+count = 8000
+
+[[workload]]
+name = "seed-1m"
+kind = "seed"
+size = 1048576
+count = 1000
+
+[[workload]]
+name = "get-1k"
+kind = "get"
+blobs = ["seed-1k"]
+
+[[workload]]
+name = "get-64k"
+kind = "get"
+blobs = ["seed-64k"]
+
+[[workload]]
+name = "get-1m"
+kind = "get"
+blobs = ["seed-1m"]
+
+[[workload]]
+name = "head-1k"
+kind = "head"
+blobs = ["seed-1k"]
+
+[[workload]]
+name = "miss"
+kind = "miss"
+blobs = ["seed-1k"]
+
+[[workload]]
+name = "get-hot-1k"
+kind = "get"
+blobs = ["seed-1k"]
+zipf = 1.1
+
+[[workload]]
 name = "put-1k"
 kind = "upload"
 size = 1024
-count = 3000
+count = 1
 duration_s = 10
+max_bytes = 536870912
 
 [[workload]]
 name = "put-64k"
 kind = "upload"
 size = 65536
-count = 600
+count = 1
 duration_s = 10
-max_bytes = 3221225472
+max_bytes = 2147483648
 
 [[workload]]
 name = "put-1m"
 kind = "upload"
 size = 1048576
-count = 300
+count = 1
 duration_s = 10
-max_bytes = 4294967296
-
-[[workload]]
-name = "get-1k"
-kind = "get"
-blobs = ["put-1k"]
-
-[[workload]]
-name = "get-64k"
-kind = "get"
-blobs = ["put-64k"]
-
-[[workload]]
-name = "get-1m"
-kind = "get"
-blobs = ["put-1m"]
-
-[[workload]]
-name = "head-1k"
-kind = "head"
-blobs = ["put-1k"]
-
-[[workload]]
-name = "miss"
-kind = "miss"
-blobs = ["put-1k"]
-
-[[workload]]
-name = "get-hot-1k"
-kind = "get"
-blobs = ["put-1k"]
-zipf = 1.1
+max_bytes = 3221225472

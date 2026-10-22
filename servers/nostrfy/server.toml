@@ -5,5 +5,5 @@ data_dirs = ["db", "images"]
 
 [upload]
 auth = "std"
-signers = 4
+signers = 1024
 max_connections = 4

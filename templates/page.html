@@ -4,6 +4,9 @@
 <header><div><h1>Blossom server benchmark</h1><p class=lede>{{server_count}} servers run in containers with identical CPU and memory limits against the same load. Servers are ordered by the geometric mean of their throughput across every workload.</p></div><div class=switch role=group aria-label="Metric">{{#views}}<button data-k={{key}} aria-pressed=false>{{label}}</button>{{/views}}</div></header>
 <div class=setup><span>run <b>{{when}}</b></span><span>suite <b>{{suite}}</b></span><span>servers on CPUs <b>{{server_cpus}}</b></span><span>load generator on CPUs <b>{{load_cpus}}</b></span><span><b>{{connections}}</b> connections</span><span>host <b>{{host_cpus}}</b> CPUs</span>{{#ram_data}}<span class=dqt>all data in RAM, fsync is free</span>{{/ram_data}}{{#busy_warning}}<span class=flagtxt>benchmark CPUs {{busy_warning}}% busy with other work: numbers unreliable</span>{{/busy_warning}}</div>
 {{>summary}}
+{{#has_seed}}<h2>Stored data</h2><p class=unit style="margin:0 0 10px">Before any read, every server is given the same fixed set of blobs, retried until stored, so reads and memory are measured against identical data. Timed uploads run last and add to it.</p><div class=sum><table><tr><th>server</th>{{#store_heads}}<th>{{label}}</th>{{/store_heads}}<th>complete</th></tr>
+{{#store}}<tr><td class=srv>{{name}}</td>{{#cells}}<td class=num>{{stored}}{{#missing}} <span class=flagtxt>{{missing}}</span>{{/missing}}{{#bad}} <span class=flagtxt>{{bad}}</span>{{/bad}}</td>{{/cells}}{{#complete}}<td class=na>yes</td>{{/complete}}{{^complete}}<td class=flagtxt>no</td>{{/complete}}</tr>
+{{/store}}</table></div>{{/has_seed}}
 <div class=legend><span><i></i>result</span><span><i class=h></i>some requests failed, so the rate is not a clean comparison</span><span><i class=q></i>disqualified handler, value shown but not comparable</span></div>
 {{#chart_views}}
 <div class="view v-{{key}}"><p class=unit>{{unit}}</p>
@@ -13,7 +16,7 @@
 {{/groups}}
 </div>
 {{/chart_views}}
-<h2>Peak memory</h2><p class=unit style="margin:0 0 10px">Highest resident memory seen in any workload, server plus its database. Dark is anonymous memory, light is file cache.</p><div class=mem>
+<h2>Peak memory</h2><p class=unit style="margin:0 0 10px">Highest resident memory during the reads, when every server holds the same seeded data, server plus its database. Dark is anonymous memory, light is file cache.</p><div class=mem>
 {{#memory}}<div class=row><span class=name>{{name}}</span><span class=track><i class="bar anon" style="width:{{anon_width}}%"></i><i class="bar file" style="width:{{file_width}}%"></i></span><span class=val>{{anon}} + {{file}} MB</span></div>{{/memory}}
 </div>
 <h2>Notes</h2><div class=notes>

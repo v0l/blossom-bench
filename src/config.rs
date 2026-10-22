@@ -149,6 +149,7 @@ fn default_seed() -> u64 {
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Upload,
+    Seed,
     Get,
     Head,
     Miss,
@@ -204,13 +205,17 @@ pub fn load_suite(path: &Path) -> Result<Suite> {
                     anyhow::ensure!(w.size.unwrap_or(0) >= 64, "{}: a timed upload needs size of at least 64 bytes", w.name);
                 }
             }
+            Kind::Seed => {
+                anyhow::ensure!(w.size.is_some() && w.count.is_some(), "{}: seed needs size and count", w.name);
+                anyhow::ensure!(w.duration_s.is_none(), "{}: a seed stores a fixed set, it has no duration", w.name);
+            }
             _ => anyhow::ensure!(!w.blobs.is_empty(), "{}: needs blobs", w.name),
         }
         for b in &w.blobs {
             let src = suite.workloads.iter().find(|x| &x.name == b);
             anyhow::ensure!(
-                src.is_some_and(|s| s.kind == Kind::Upload),
-                "{}: blobs entry {} is not an upload workload",
+                src.is_some_and(|s| matches!(s.kind, Kind::Upload | Kind::Seed)),
+                "{}: blobs entry {} is not an upload or seed workload",
                 w.name,
                 b
             );

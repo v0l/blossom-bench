@@ -1,4 +1,4 @@
 name = "blossom-deno"
 port = 18103
-notes = "hzrd149/blossom-server 6.3.1 on Deno; answers 503 when its upload queue is full"
+notes = "hzrd149/blossom-server 6.3.1 on Deno. Its upload pool has no queue and answers 503 when full; the default is one worker per CPU with 4 jobs each, raised here to 4 workers with 64 jobs each so the 64 connections fit"
 startup_timeout_s = 180

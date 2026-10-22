@@ -137,7 +137,7 @@ fn geomean_order(rep: &Report) -> Vec<usize> {
         let logs: Vec<f64> = rep.servers[i]
             .results
             .iter()
-            .filter(|r| r.skipped.is_none() && r.ok_per_s > 0.0)
+            .filter(|r| r.skipped.is_none() && r.ok_per_s > 0.0 && r.kind != "seed")
             .map(|r| r.ok_per_s.ln())
             .collect();
         if logs.is_empty() { f64::MIN } else { logs.iter().sum::<f64>() / logs.len() as f64 }
@@ -170,6 +170,28 @@ struct PageView {
     chart_views: Vec<ChartView>,
     memory: Vec<MemoryRow>,
     notes: Vec<NoteBlock>,
+    has_seed: bool,
+    store_heads: Vec<StoreHead>,
+    store: Vec<StoreRow>,
+}
+
+#[derive(Content)]
+struct StoreRow {
+    name: String,
+    cells: Vec<StoreCell>,
+    complete: bool,
+}
+
+#[derive(Content)]
+struct StoreCell {
+    stored: String,
+    missing: String,
+    bad: String,
+}
+
+#[derive(Content)]
+struct StoreHead {
+    label: String,
 }
 
 #[derive(Content)]
@@ -335,8 +357,13 @@ fn group_has_dq(s: &ServerRun, workloads: &[&str]) -> bool {
     workloads.iter().any(|w| find(s, w).is_some_and(|r| r.disqualified))
 }
 
+fn read_phase(r: &WorkloadResult) -> bool {
+    r.skipped.is_none() && matches!(r.kind.as_str(), "get" | "head" | "miss")
+}
+
 fn peak_mem(s: &ServerRun) -> f64 {
-    s.results.iter().filter(|r| r.skipped.is_none()).map(|r| r.peak_anon_mb + r.peak_file_mb).fold(0.0, f64::max)
+    let reads = s.results.iter().filter(|r| read_phase(r)).map(|r| r.peak_anon_mb + r.peak_file_mb).fold(0.0, f64::max);
+    if reads > 0.0 { reads } else { s.results.iter().filter(|r| r.skipped.is_none()).map(|r| r.peak_anon_mb + r.peak_file_mb).fold(0.0, f64::max) }
 }
 
 fn summary_rows(rep: &Report, order: &[usize]) -> Vec<SummaryRow> {
@@ -390,7 +417,8 @@ fn memory_rows(rep: &Report, order: &[usize]) -> Vec<MemoryRow> {
         .iter()
         .map(|&i| {
             let mut best = (0.0f64, 0.0f64);
-            for r in rep.servers[i].results.iter().filter(|r| r.skipped.is_none()) {
+            let any_reads = rep.servers[i].results.iter().any(read_phase);
+            for r in rep.servers[i].results.iter().filter(|r| if any_reads { read_phase(r) } else { r.skipped.is_none() }) {
                 if r.peak_anon_mb + r.peak_file_mb > best.0 + best.1 {
                     best = (r.peak_anon_mb, r.peak_file_mb);
                 }
@@ -409,6 +437,60 @@ fn memory_rows(rep: &Report, order: &[usize]) -> Vec<MemoryRow> {
             file: format!("{f:.0}"),
         })
         .collect()
+}
+
+fn seed_names(rep: &Report) -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = Vec::new();
+    for sv in &rep.servers {
+        for r in sv.results.iter().filter(|r| r.kind == "seed") {
+            if !out.iter().any(|(n, _)| n == &r.name) {
+                out.push((r.name.clone(), r.size.unwrap_or(0)));
+            }
+        }
+    }
+    out
+}
+
+fn size_label(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 20 => format!("{} MiB", b >> 20),
+        b if b >= 1 << 10 => format!("{} KiB", b >> 10),
+        b => format!("{b} B"),
+    }
+}
+
+fn store_rows(rep: &Report, order: &[usize], seeds: &[(String, u64)]) -> Vec<StoreRow> {
+    order
+        .iter()
+        .map(|&i| {
+            let sv = &rep.servers[i];
+            let cells: Vec<StoreCell> = seeds
+                .iter()
+                .map(|(name, _)| match sv.results.iter().find(|r| &r.name == name) {
+                    Some(r) => StoreCell {
+                        stored: rate_count(r.ok),
+                        missing: if r.seed_missing > 0 { format!("{} missing", r.seed_missing) } else { String::new() },
+                        bad: if r.verify_bad > 0 { format!("{} of {} readbacks wrong", r.verify_bad, r.verified) } else { String::new() },
+                    },
+                    None => StoreCell { stored: "n/a".into(), missing: String::new(), bad: String::new() },
+                })
+                .collect();
+            let complete = sv.results.iter().filter(|r| r.kind == "seed").all(|r| r.seed_missing == 0 && r.verify_bad == 0);
+            StoreRow { name: sv.name.clone(), cells, complete }
+        })
+        .collect()
+}
+
+fn rate_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn note_blocks(rep: &Report, order: &[usize]) -> Vec<NoteBlock> {
@@ -447,6 +529,7 @@ const SCRIPT: &str = include_str!("../templates/script.js");
 
 pub fn page(rep: &Report) -> String {
     let order = geomean_order(rep);
+    let seeds = seed_names(rep);
     let chart_views = VIEWS
         .iter()
         .map(|view| ChartView {
@@ -483,6 +566,9 @@ pub fn page(rep: &Report) -> String {
         chart_views,
         memory: memory_rows(rep, &order),
         notes: note_blocks(rep, &order),
+        has_seed: !seeds.is_empty(),
+        store_heads: seeds.iter().map(|(n, size)| StoreHead { label: format!("{n} ({})", size_label(*size)) }).collect(),
+        store: store_rows(rep, &order, &seeds),
     };
 
     let mut engine: Ramhorns = Ramhorns::lazy(".").expect("template engine");
@@ -564,6 +650,23 @@ mod tests {
         rep.servers[0].results[0].capped = true;
         let html = page(&rep);
         assert!(html.contains("<b class=captag"));
+    }
+
+    #[test]
+    fn seeded_store_is_shown_and_memory_comes_from_the_reads() {
+        let mut rep = report();
+        for sv in &mut rep.servers {
+            sv.results[0].peak_anon_mb = 100.0;
+            sv.results.insert(0, WorkloadResult { name: "seed-1k".into(), kind: "seed".into(), size: Some(1024), ok: 500, requests: 520, ..Default::default() });
+            sv.results.push(WorkloadResult { name: "put-1k".into(), kind: "upload".into(), ok: 10, requests: 10, ok_per_s: 5.0, peak_anon_mb: 900.0, ..Default::default() });
+        }
+        rep.servers[1].results[0].seed_missing = 3;
+        let html = page(&rep);
+        assert!(html.contains("<h2>Stored data</h2>"));
+        assert!(html.contains("seed-1k (1 KiB)"));
+        assert!(html.contains("3 missing"));
+        assert!(html.contains(">100 MB<") || html.contains("100 + 0 MB"));
+        assert!(!html.contains("900 + 0 MB"));
     }
 
     #[test]

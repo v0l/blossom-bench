@@ -44,19 +44,24 @@ is a disqualification.
 
 ## Workloads
 
-`suites/*.toml`. An `upload` workload with `duration_s` uploads distinct blobs of `size` bytes for
-that long, each with its own freshly signed BUD-11 token built by producer threads ahead of the
-connections, and stops early once `max_bytes` have been sent (default 3 GiB) so a fast server cannot
-fill the data directory. Its first `count` successful blobs are kept for the read workloads. Without
-`duration_s` it sends exactly `count` blobs, which for small blobs finishes in milliseconds and is
-too noisy to compare. `get`, `head` and `miss` workloads read from the blobs of the upload workloads
-named in `blobs` for `duration_s` (or the suite's). `zipf` skews reads toward a hot set.
-`content = "text"` makes compressible bodies. A row marked capped hit `max_bytes` before the deadline;
-its rate is still requests over the time it ran.
+`suites/*.toml`. The standard suite runs in three phases so every server is compared on equal terms:
 
-`server_memory` is the container memory cap. With `--ram-data` the blobs a server stores count
-against it (tmpfs is charged to the writing container), so it must cover every upload workload's
-`max_bytes` plus the server itself.
+1. **Seed.** A `seed` workload stores `count` blobs of `size` bytes. The blobs are the same bytes for
+   every server (fixed seed from the workload name) and failed uploads are retried until stored, so
+   every server holds an identical set. The report's Stored data table shows what each one ended up
+   holding.
+2. **Reads.** `get`, `head` and `miss` workloads read from the seeded blobs named in `blobs` for
+   `duration_s`. Peak memory in the report comes from this phase, when every store is identical.
+   `zipf` skews reads toward a hot set.
+3. **Uploads.** An `upload` workload with `duration_s` uploads distinct, freshly signed blobs for that
+   long and stops early once `max_bytes` have been sent, so a fast server cannot fill the data
+   directory. A capped row hit `max_bytes` first; its rate is requests over the time it ran. Without
+   `duration_s` it sends exactly `count` blobs, which for small blobs is over in milliseconds and too
+   noisy to compare.
+
+`content = "text"` makes compressible bodies. `server_memory` is the container memory cap. With
+`--ram-data` the blobs a server stores are charged to it (tmpfs is billed to the writing container),
+so it must cover the seed plus every upload's `max_bytes` plus the server itself.
 
 ## How servers are run
 
@@ -93,7 +98,7 @@ benchmark key that signs every upload, so a server can allow-list or register it
 
 ## Included servers
 
-route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1), sebdeveloper6952/blossom-server (Go),
+route96, ditto-blossom, hzrd149/blossom-server (Deno, 6.3.1, upload pool raised to 4 workers x 64 jobs), sebdeveloper6952/blossom-server (Go),
 MonumentalSystems/blossom-rs, 0xtrr/cherry-server, quentintaranpino/nostrcheck-server,
 servus-social/servus, Sakura (Odin), iqbqioza/nostrfy, barrydeen/haven and fiatjaf/pyramid (both use khatru's Blossom
 package), and damus-io/afterbloom.
