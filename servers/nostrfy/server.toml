@@ -1,6 +1,6 @@
 name = "nostrfy"
 port = 18115
-notes = "iqbqioza/nostrfy, a Rust relay with a built-in Blossom server; the image installs the project's release binary. Blobs are files under the uploader's npub, metadata in LMDB, and each blob is fsynced before the ack. Uploads are capped in code at 2 in flight per pubkey (not configurable) and 4 maximum-size uploads across the server, so upload workloads run with 4 connections signed by 4 different keys (reads and lookups use the normal 64). At 64 connections 92 to 99 percent of its uploads are refused with 429. It also fixes the kernel send buffer at 16 KiB on every connection (not configurable), so large GETs crawl: 1 MB reads reach about 110/s using 0.08 cores"
+notes = "iqbqioza/nostrfy, a Rust relay with a built-in Blossom server; the image installs the project's release binary. Blobs are files under the uploader's npub, metadata in LMDB, and each blob is fsynced before the ack. Uploads are capped in code at 2 in flight per pubkey (not configurable) and 4 maximum-size uploads across the server, so upload workloads run with 4 connections signed with 1024 different keys (reads and lookups use the normal 64). At 64 connections 92 to 99 percent of its uploads are refused with 429. It also fixes the kernel send buffer at 16 KiB on every connection (not configurable), so large GETs crawl: 1 MB reads reach about 110/s using 0.08 cores"
 data_dirs = ["db", "images"]
 
 [upload]
