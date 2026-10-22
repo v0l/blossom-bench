@@ -266,6 +266,21 @@ async fn verify(ctx: &Ctx<'_>, blobs: &[Blob], rng: &mut Rng) -> (usize, usize) 
 }
 
 const SEED_RETRIES: usize = 20;
+const SETTLE_LIMIT: Duration = Duration::from_secs(900);
+
+async fn settle(ctx: &Ctx<'_>, blobs: &[Blob]) {
+    tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+    let Some(last) = blobs.last() else { return };
+    let started = std::time::Instant::now();
+    while started.elapsed() < SETTLE_LIMIT {
+        if let Ok((200, body)) = load::fetch(ctx.addr, &format!("/{}", last.hash), ctx.def.follow_redirects).await {
+            if hex::encode(Sha256::digest(&body)) == last.hash {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
 
 async fn seed(ctx: &mut Ctx<'_>, w: &Workload) -> Result<WorkloadResult> {
     let size = w.size.expect("validated") as usize;
@@ -286,7 +301,7 @@ async fn seed(ctx: &mut Ctx<'_>, w: &Workload) -> Result<WorkloadResult> {
         path: ctx.def.upload.path.clone(),
         auth: ctx.def.upload.auth.clone(),
         sha_header: ctx.def.upload.sha_header,
-        resign: ctx.def.upload.resign,
+        resign: true,
         host: ctx.addr.ip().to_string(),
         bound: ctx.def.upload.bound_auth.then(|| format!("http://{}", ctx.addr)),
         signers: ctx.def.upload.signers.max(1),
@@ -343,7 +358,7 @@ async fn seed(ctx: &mut Ctx<'_>, w: &Workload) -> Result<WorkloadResult> {
         }
     }
     if ctx.def.upload.settle_s > 0 {
-        tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+        settle(ctx, &stored).await;
     }
     let mut vrng = Rng(seed_value ^ 0xBEEF | 1);
     let verified = verify(ctx, &stored, &mut vrng).await;
@@ -593,7 +608,12 @@ pub async fn execute(ctx: &mut Ctx<'_>, w: &Workload, seed_arg: u64) -> Result<W
 
     if w.kind == Kind::Upload {
         if ctx.def.upload.settle_s > 0 {
-            tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+            let recent: Vec<Blob> = out.kept.iter().map(|(hash, size)| Blob { hash: hash.clone(), size: *size }).collect();
+            if recent.is_empty() {
+                tokio::time::sleep(Duration::from_secs(ctx.def.upload.settle_s)).await;
+            } else {
+                settle(ctx, &recent).await;
+            }
         }
         let kept: Vec<Blob> = if w.duration_s.is_some() {
             out.kept.iter().map(|(hash, size)| Blob { hash: hash.clone(), size: *size }).collect()
